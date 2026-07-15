@@ -1,0 +1,7 @@
+{
+  "name": "com.atlas.kernel",
+  "version": "0.1.0",
+  "displayName": "Atlas Kernel",
+  "description": "Phase 0 Unity integration for Atlas OS",
+  "unity": "2022.3"
+}
