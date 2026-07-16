@@ -1,0 +1,134 @@
+# ==========================================
+# Go build artifacts
+# ==========================================
+
+# Compiled binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build output directory
+/build/
+/atlas
+/atlas.exe
+
+# Test binaries
+*.test
+
+# Coverage reports
+*.out
+*.cov
+
+# Go workspace
+/go.work
+/go.work.sum
+
+# ==========================================
+# Go dependencies (go.sum must be committed)
+# ==========================================
+
+# Module cache (don't commit)
+/vendor/
+
+# ==========================================
+# IDE and editor files
+# ==========================================
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Visual Studio / Rider
+.idea/
+*.sln
+*.csproj
+*.userprefs
+*.pidb
+*.suo
+*.user
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ==========================================
+# Operating System files
+# ==========================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Linux
+.directory
+
+# ==========================================
+# Project-specific: Atlas local data
+# ==========================================
+
+# The .atlas/ folder contains local graph.db and user data.
+# DO NOT commit this – it's generated per user/project.
+.atlas/
+
+# ==========================================
+# Unity-specific (for the embedded package)
+# ==========================================
+
+# If you ever extract the Unity package for testing,
+# ignore its temporary folders:
+/Library/
+/Temp/
+/Obj/
+/Build/
+/Builds/
+/Logs/
+/UserSettings/
+
+# Ignore Unity generated files if extracted:
+*.csproj
+*.unityproj
+*.sln
+*.userprefs
+
+# ==========================================
+# Logs and temporary files
+# ==========================================
+
+*.log
+*.tmp
+*.temp
+
+# ==========================================
+# Package manager files (optional)
+# ==========================================
+
+# If you have a separate Unity project for testing
+# you may want to ignore its Packages folder,
+# but for Atlas OS itself, we commit everything.
+# So we leave it uncommented.
+
+# ==========================================
+# Environment files (sensitive)
+# ==========================================
+
+.env
+.env.local
+.env.*.local
+
+# ==========================================
+# Optional: Node.js / npm (if used)
+# ==========================================
+
+node_modules/
+package-lock.json

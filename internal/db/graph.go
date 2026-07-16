@@ -48,3 +48,32 @@ func CreateDB(dbPath string) error {
 	_, err = db.Exec(schemaContent)
 	return err
 }
+
+// Insert Node adds or updates a node in the graph
+func InsertNode(dbPath, id, typ, guid, name string) error {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`INSERT OR REPLACE INTO nodes (id, type, guid, name, json)
+		VALUES (?, ?, ?, ?, ?)`,
+		id, typ, guid, name, "{}")
+	return err
+}
+
+// InsertEdge adds a relationship edge
+func InsertEdge(dbPath, srcID, tgtID, rel string) error {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+	INSERT INTO edges (source, target, relationship, properties)
+		VALUES (?, ?, ?, ?)`,
+		srcID, tgtID, rel, "{}")
+	return err
+}
