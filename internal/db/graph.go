@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -49,6 +50,10 @@ func CreateDB(dbPath string) error {
 	return err
 }
 
+func GetDBPath(projectRoot string) string {
+	return filepath.Join(projectRoot, ".atlas", "graph.db")
+}
+
 // Insert Node adds or updates a node in the graph
 func InsertNode(dbPath, id, typ, guid, name string) error {
 	db, err := sql.Open("sqlite", dbPath)
@@ -57,9 +62,11 @@ func InsertNode(dbPath, id, typ, guid, name string) error {
 	}
 	defer db.Close()
 
-	_, err = db.Exec(`INSERT OR REPLACE INTO nodes (id, type, guid, name, json)
-		VALUES (?, ?, ?, ?, ?)`,
-		id, typ, guid, name, "{}")
+	updatedAt := time.Now().Unix()
+
+	_, err = db.Exec(`
+	INSERT OR REPLACE INTO nodes (id, type, guid, name, json, updated_at)
+	VALUES (?, ?, ?, ?, '{}', ?)`, id, typ, guid, name, updatedAt)
 	return err
 }
 
@@ -71,9 +78,39 @@ func InsertEdge(dbPath, srcID, tgtID, rel string) error {
 	}
 	defer db.Close()
 
+	createdAt := time.Now().Unix()
+
 	_, err = db.Exec(`
-	INSERT INTO edges (source, target, relationship, properties)
-		VALUES (?, ?, ?, ?)`,
-		srcID, tgtID, rel, "{}")
+	INSERT INTO edges (source, target, relationship, properties, created_at)
+	VALUES (?, ?, ?, '{}', ?)`, srcID, tgtID, rel, createdAt)
 	return err
+}
+
+// GetNodeByGUID retrieves a node by its Unity GUID
+func GetNodeByGUID(dbPath, guid string) (*Node, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	var id, typ, name string
+	err = db.QueryRow(`SELECT id, type, name FROM nodes WHERE guid = ?`, guid).
+		Scan(&id, &typ, &name)
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &Node{ID: id, Type: typ, GUID: guid, Name: name}, nil
+}
+
+type Node struct {
+	ID   string
+	Type string // "scene", "prefab", etc.
+	GUID string
+	Name string
 }

@@ -1,21 +1,35 @@
-# Atlas OS
+# Atlas OS — Phase 0 MVP
 
-Atlas OS is a cross-platform AI-assisted development framework designed to help developers build software using local Large Language Models (LLMs) while keeping full control of their code and data.
+**AI-native Game Development Operating System**
 
-The project follows a privacy-first, local-only approach, integrating with Ollama and modern development tools to provide intelligent planning, code generation, project analysis, and automation without relying on cloud-based AI services.
+*Your AI Technical Director. Not a coding assistant.*
 
-## Goals
+---
 
-- Privacy-first local AI workflows
-- Cross-platform architecture (Windows, Linux, macOS)
-- Unity-first development support
-- Safe and non-intrusive code assistance
-- Modular and extensible plugin architecture
-- Local project indexing and semantic search
-- AI-powered planning, refactoring, and documentation
+## 🎯 What is Atlas?
 
-## Current Status
+Atlas builds a **persistent understanding of your Unity project** — not just files, but gameplay systems, performance budgets, and engineering decisions.
 
-🚧 Phase 0 – Foundation
+It lives inside your project as a safe, read-only kernel.
 
-This phase establishes the core architecture, project structure, local AI integration, and development workflow that future Atlas OS features will build upon.
+---
+
+## ✅ Phase 0 Features (Shipping Now)
+
+| Feature | Status |
+|---------|--------|
+| Safe installation (no source changes) | ✅ |
+| Unity Editor integration | ✅ |
+| SQLite graph database (`*.atlas/graph.db`) | ✅ |
+| CLI for install & indexing | ✅ |
+| Scene import detection | ✅ |
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install Atlas Kernel
+```bash
+cd your-unity-project/
+atlas init --dry-run     # Preview changes first!
+atlas init               # Actually install (creates Packages/ and .atlas/)
