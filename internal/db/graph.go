@@ -81,7 +81,7 @@ func InsertEdge(dbPath, srcID, tgtID, rel string) error {
 	createdAt := time.Now().Unix()
 
 	_, err = db.Exec(`
-	INSERT INTO edges (source, target, relationship, properties, created_at)
+	INSERT OR REPLACE INTO edges (source, target, relationship, properties, created_at)
 	VALUES (?, ?, ?, '{}', ?)`, srcID, tgtID, rel, createdAt)
 	return err
 }

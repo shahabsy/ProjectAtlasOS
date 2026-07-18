@@ -18,15 +18,23 @@ func main() {
 	switch command {
 	case "init":
 		dryRun := false
-		for _, arg := range os.Args {
+		for _, arg := range os.Args[2:] {
 			if arg == "--dry-run" {
 				dryRun = true
 				break
 			}
 		}
-		core.Init(dryRun)
+		if err := core.Init(dryRun); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	case "index":
 		handleIndexCmd(os.Args[2:])
+	case "verify":
+		if err := core.VerifyCmd(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -35,13 +43,26 @@ func main() {
 }
 
 func handleIndexCmd(args []string) {
-	if len(args) < 1 || args[0] != "node" {
-		fmt.Printf("Use `atlas index node --type=<type> --guid=<guid> --name=<name>`")
+	if len(args) == 0 {
+		fmt.Printf("Use atlas index [node|scene] ...")
 		return
 	}
 
+	subCmd := args[0]
+	switch subCmd {
+	case "node":
+		handleIndexNode(args[1:])
+	case "scene":
+		handleIndexScene(args[1:])
+	default:
+		fmt.Printf("Unknow index subcommand: %s\n", subCmd)
+		os.Exit(1)
+	}
+}
+
+func handleIndexNode(args []string) {
 	typ, guid, name := "", "", ""
-	for i := 1; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		switch {
 		case strings.HasPrefix(args[i], "--type="):
 			typ = strings.TrimPrefix(args[i], "--type=")
@@ -51,22 +72,73 @@ func handleIndexCmd(args []string) {
 			name = strings.TrimPrefix(args[i], "--name=")
 		}
 	}
-
 	if typ == "" || guid == "" || name == "" {
-		fmt.Printf("Missing required arguments: --type, --guid, --name")
-		return
+		fmt.Println("Missing required arguments: --type, --guid, --name")
+		os.Exit(1)
 	}
-
 	if err := core.IndexNodeCmd(typ, guid, name); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
+func handleIndexScene(args []string) {
+	var full bool
+	var jsonPayload string
+	var filePath string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--full":
+			full = true
+		case "--json":
+			if i+1 < len(args) {
+				jsonPayload = args[i+1]
+				i++
+			}
+		case "--file":
+			if i+1 < len(args) {
+				filePath = args[i+1]
+				i++
+			}
+		}
+	}
+	if !full {
+		fmt.Println("Usage: atlas index scene --full [--json '...' | -- file data.json]")
+		os.Exit(1)
+	}
+
+	var sceneData []byte
+	var err error
+	if filePath != "" {
+		sceneData, err = os.ReadFile(filePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to read file: %v\n", err)
+			os.Exit(1)
+		}
+	} else if jsonPayload != "" {
+		sceneData = []byte(jsonPayload)
+	} else {
+		fmt.Println("Missing --json or --file")
+		os.Exit(1)
+	}
+
+	if err := core.IndexFullScene(sceneData); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
 
 func printUsage() {
-	fmt.Println("Usage: atlas [init|index]")
-	fmt.Println("\nCommands:")
-	fmt.Println("	init		Install Atlas Kernel")
-	fmt.Println("	index		Index nodes into graph.db")
-	fmt.Println("	node		Add a scene/prefab/shader node (requires --type, --guid, --name)")
+	fmt.Println("Atlas OS – Phase 0 MVP")
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  atlas init [--dry-run]          Install Atlas Kernel in a Unity project")
+	fmt.Println("  atlas index node --type=<type> --guid=<guid> --name=<name>   Index a single node")
+	fmt.Println("  atlas index scene --full --file <path>   Index entire scene hierarchy from JSON file")
+	fmt.Println("  atlas verify                     Check indexed nodes in the database")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  atlas init --dry-run")
+	fmt.Println("  atlas index node --type=scene --guid=abc123 --name=\"MainMenu\"")
+	fmt.Println("  atlas index scene --full --file scene_data.json")
 }

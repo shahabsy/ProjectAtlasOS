@@ -1,0 +1,98 @@
+package core
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/shahabsy/ProjectAtlasOS/internal/db"
+)
+
+// SceneData matches the JSON sent from Unity
+type SceneData struct {
+	Name        string           `json:"name"`
+	Guid        string           `json:"guid"`
+	GameObjects []GameObjectData `json:"gameObjects"`
+}
+
+type GameObjectData struct {
+	Id         string          `json:"id"`
+	Name       string          `json:"name"`
+	Tags       []string        `json:"tags"`
+	Layer      int             `json:"layer"`
+	ParentId   string          `json:"parent_id"`
+	Components []ComponentData `json:"components"`
+}
+
+type ComponentData struct {
+	Type       string                 `json:"type"`
+	Enabled    bool                   `json:"enabled"`
+	Properties map[string]interface{} `json:"properties"`
+}
+
+func IndexFullScene(jsonData []byte) error {
+	var scene SceneData
+	if err := json.Unmarshal(jsonData, &scene); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+
+	if scene.Guid == "" {
+		return fmt.Errorf("scene GUID is empty. Make sure the scene is saved and the path is valid.")
+	}
+	if len(scene.Guid) < 8 {
+		return fmt.Errorf("scene GUID is too short: %s", scene.Guid)
+	}
+
+	projectRoot, err := findUnityProject()
+	if err != nil {
+		return err
+	}
+	dbPath := db.GetDBPath(projectRoot)
+
+	// 1. Insert scene node (idempotent)
+	sceneNodeId := "scene_" + scene.Guid[:8]
+	if err := db.InsertNode(dbPath, sceneNodeId, "scene", scene.Guid, scene.Name); err != nil {
+		return fmt.Errorf("failed to insert scene node: %w", err)
+	}
+
+	// 2. Insert all GameObjects and components
+	for _, gobj := range scene.GameObjects {
+		gobNodeId := gobj.Id
+
+		// Insert GameObject node
+		if err := db.InsertNode(dbPath, gobNodeId, "gameobject", "", gobj.Name); err != nil {
+			return fmt.Errorf("failed to insert GameObject '%s': %w", gobj.Name, err)
+		}
+
+		// Edge: scene CONTAINS gameobject
+		if err := db.InsertEdge(dbPath, sceneNodeId, gobNodeId, "CONTAINS"); err != nil {
+			return fmt.Errorf("failed to link scene to GameObject: %w", err)
+		}
+
+		// Edge: parent-child relationship
+		if gobj.ParentId != "" {
+			if err := db.InsertEdge(dbPath, gobj.ParentId, gobNodeId, "PARENT_OF"); err != nil {
+				return fmt.Errorf("failed to link parent-child: %w", err)
+			}
+		}
+
+		// Index components
+		for _, comp := range gobj.Components {
+			compNodeId := gobNodeId + "_" + comp.Type
+			compName := comp.Type
+			if len(comp.Properties) > 0 {
+				if name, ok := comp.Properties["name"]; ok {
+					compName = fmt.Sprintf("%s (%v)", comp.Type, name)
+				}
+			}
+			if err := db.InsertNode(dbPath, compNodeId, "component", "", compName); err != nil {
+				return fmt.Errorf("failed to insert component: %w", err)
+			}
+			if err := db.InsertEdge(dbPath, gobNodeId, compNodeId, "HAS_COMPONENT"); err != nil {
+				return fmt.Errorf("failed to link component: %w", err)
+			}
+		}
+	}
+
+	fmt.Printf("✅ Indexed scene '%s' with %d GameObjects\n", scene.Name, len(scene.GameObjects))
+	return nil
+}
