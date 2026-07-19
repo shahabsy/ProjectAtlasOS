@@ -1,15 +1,18 @@
-using UnityEngine;
 using UnityEditor;
-using UnityEditor.SceneManagement;
+using UnityEngine;
 using System.IO;
 using System.Collections.Generic;
+using UnityEditor.SceneManagement;
 using System.Threading.Tasks;
+using Unity.VisualScripting.YamlDotNet.Core.Tokens;
+//using System.Diagnostics;
 
 namespace Atlas.Kernel.Editor
 {
     public class SceneIndexer : AssetPostprocessor
     {
-        // ─── Phase 0: Auto-index on import ──────────────────────────────
+        // ──────────────── PHASE 0: Auto-Index on Import ─────────────────
+
         static void OnPostprocessAllAssets(
             string[] importedAssets,
             string[] deletedAssets,
@@ -20,42 +23,39 @@ namespace Atlas.Kernel.Editor
             {
                 if (!path.EndsWith(".unity")) continue;
 
-                Debug.Log($"[Atlas] Detected scene import: {path}");
-                string guid = AssetDatabase.AssetPathToGUID(path);
-                Debug.Log($"[Atlas] Scene GUID: {guid} -> index into graph.db");
-                IndexScene(path);
+                // ✅ Get GUID from .meta file - ALWAYS reliable
+                string guid = GetGUIDFromMeta(path);
+                if (string.IsNullOrEmpty(guid)) return; // Error already logged
+
+                IndexScene(path, guid);
             }
 
             foreach (string path in deletedAssets)
             {
-                string guid = AssetDatabase.AssetPathToGUID(path);
-                Debug.Log($"[Atlas] Scene removed: {path} (guid: {guid})");
+                Debug.Log($"[Atlas] Scene removed: {path}");
             }
         }
 
-        static void IndexScene(string path)
+        static void IndexScene(string path, string guid)
         {
-            string guid = AssetDatabase.AssetPathToGUID(path);
             string projectRoot = Application.dataPath.Replace("/Assets", "");
             string dbPath = Path.Combine(projectRoot, ".atlas", "graph.db");
 
             if (!File.Exists(dbPath))
             {
-                Debug.LogWarning($"[Atlas] No graph.db found at {dbPath} - Run `atlas init` first.");
+                Debug.LogWarning($"[Atlas] No graph.db found. Run `atlas init` first.");
                 return;
             }
 
-            // Configurable atlas executable path (EditorPrefs)
             string atlasExePath = EditorPrefs.GetString("Atlas.ExePath", @"E:\ProjectAtlasOS\atlas.exe");
             if (string.IsNullOrEmpty(atlasExePath) || !File.Exists(atlasExePath))
             {
-                Debug.LogWarning($"[Atlas] atlas.exe not found at '{atlasExePath}'. Set path with EditorPrefs key 'Atlas.ExePath'.");
+                Debug.LogWarning($"[Atlas] atlas.exe not found. Set path in Atlas/Settings.");
                 return;
             }
 
             string sceneName = Path.GetFileNameWithoutExtension(path);
 
-            // Run external process off the main thread to avoid blocking the Editor UI
             Task.Run(() =>
             {
                 try
@@ -78,11 +78,11 @@ namespace Atlas.Kernel.Editor
                     {
                         if (exitCode == 0)
                         {
-                            Debug.Log($"[Atlas] Indexed scene as node '{sceneName}' (guid: {guid})");
+                            Debug.Log($"[Atlas] Indexed scene: '{sceneName}' (guid: {guid})");
                         }
                         else
                         {
-                            Debug.LogError($"[Atlas] Failed to index scene: (exit {exitCode}).\nstdout: {stdout}\nstderr: {stderr}");
+                            Debug.LogError($"[Atlas] Index failed: {stderr}");
                         }
                     };
                 }
@@ -90,111 +90,83 @@ namespace Atlas.Kernel.Editor
                 {
                     UnityEditor.EditorApplication.delayCall += () =>
                     {
-                        Debug.LogError($"[Atlas] SQLite integration error: {ex.Message}");
+                        Debug.LogError($"[Atlas] Index error: {ex.Message}");
                     };
                 }
             });
         }
 
-        // ─── Phase 1: Full Scene Hierarchy Indexing ──────────────────────
+        // ──────────────── PHASE 1: Full Scene Hierarchy Indexing ────────
 
         [MenuItem("Atlas/Index Full Scene")]
         public static void IndexFullScene()
         {
             var scene = EditorSceneManager.GetActiveScene();
-            Debug.Log($"[Atlas] Active scene name: '{scene.name}'");
-            Debug.Log($"[Atlas] Active scene path: '{scene.path}'");
-            Debug.Log($"[Atlas] Active scene isDirty: {scene.isDirty}");
-            Debug.Log($"[Atlas] Active scene is valid: {scene.IsValid()}");
 
             if (!scene.IsValid())
             {
                 Debug.LogError("[Atlas] No active scene found.");
                 return;
             }
-            // Check if scene is saved
-            if (string.IsNullOrEmpty(scene.path))
-            {
-                Debug.LogError("[Atlas] The scene has not been saved. Please save the scene and try again.");
-                return;
-            }
 
+            // Ensure scene is saved
             if (scene.isDirty)
             {
                 EditorSceneManager.SaveScene(scene);
+                Debug.Log($"[Atlas] Saved unsaved changes in '{scene.name}'.");
             }
 
-            string guid = AssetDatabase.AssetPathToGUID(scene.path);
+            string scenePath = scene.path;
+            string guid = GetGUIDFromMeta(scenePath);
             if (string.IsNullOrEmpty(guid))
             {
-                Debug.LogError($"[Atlas] GUID is empty for scene '{scene.name}' at path '{scene.path}'. Ensure the scene is in the Assets folder.");
+                Debug.LogError($"[Atlas] Failed to get GUID for '{scene.name}' at path '{scenePath}'.");
                 return;
             }
 
-            string json = GetSceneHierarchyJson(scene);
-            if (string.IsNullOrEmpty(json))
+            string json = GenerateSceneJson(scene, guid);
+            if (json == null)
             {
                 Debug.LogError("[Atlas] Failed to generate scene hierarchy JSON.");
                 return;
             }
-            string tempFile = Path.GetTempFileName() + ".json";
-            File.WriteAllText(tempFile, json);
 
-            string projectRoot = Application.dataPath.Replace("/Assets", "");
-            string atlasExe = EditorPrefs.GetString("Atlas.ExePath", @"E:\ProjectAtlasOS\atlas.exe");
-            if (string.IsNullOrEmpty(atlasExe) || !File.Exists(atlasExe))
-            {
-                Debug.LogWarning($"[Atlas] atlas.exe not found at '{atlasExe}'. Set EditorPrefs 'Atlas.ExePath' correctly.");
-                if (File.Exists(tempFile)) File.Delete(tempFile);
-                return;
-            }
-
-            Task.Run(() =>
-            {
-                try
-                {
-                    var process = new System.Diagnostics.Process();
-                    process.StartInfo.FileName = atlasExe;
-                    process.StartInfo.Arguments = $"index scene --full --file \"{tempFile}\"";
-                    process.StartInfo.WorkingDirectory = projectRoot;
-                    process.StartInfo.UseShellExecute = false;
-                    process.StartInfo.RedirectStandardOutput = true;
-                    process.StartInfo.RedirectStandardError = true;
-                    process.Start();
-
-                    string stdout = process.StandardOutput.ReadToEnd();
-                    string stderr = process.StandardError.ReadToEnd();
-                    process.WaitForExit();
-
-                    int exitCode = process.ExitCode;
-                    UnityEditor.EditorApplication.delayCall += () =>
-                    {
-                        if (exitCode == 0)
-                        {
-                            Debug.Log("[Atlas] Full scene indexing succeeded.\n" + stdout);
-                        }
-                        else
-                        {
-                            Debug.LogError("[Atlas] Full scene indexing failed.\nstdout: " + stdout + "\nstderr: " + stderr);
-                        }
-
-                        if (File.Exists(tempFile)) File.Delete(tempFile);
-                    };
-                }
-                catch (System.Exception ex)
-                {
-                    UnityEditor.EditorApplication.delayCall += () =>
-                    {
-                        Debug.LogError($"[Atlas] Full scene indexing error: {ex.Message}");
-                        if (File.Exists(tempFile)) File.Delete(tempFile);
-                    };
-                }
-            });
+            RunCLI(scene.name, json); // Pass scene name for logging
         }
 
-        // Serializable payload classes so UnityEngine.JsonUtility can serialize correctly
+        static string GetGUIDFromMeta(string scenePath)
+        {
+            // Normalize path to Assets/ format (Unity uses forward slashes)
+            string relativePath = scenePath.Replace("Assets/", "");
+
+            // Construct meta file path (handles Windows/macOS/Linux paths)
+            string metaPath = Path.Combine(Application.dataPath, relativePath + ".meta");
+
+            if (!File.Exists(metaPath))
+            {
+                Debug.LogError($"[Atlas] .meta file not found: {metaPath}");
+                return null;
+            }
+
+            try
+            {
+                var lines = File.ReadAllLines(metaPath);
+                foreach (var line in lines)
+                {
+                    if (line.StartsWith("guid:"))
+                        return line.Substring(5).Trim(); // "guid: d20ebab..." → "d20ebab..."
+                }
+                Debug.LogError($"[Atlas] No GUID found in .meta file: {scenePath}");
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"[Atlas] Failed to read .meta file: {ex.Message}");
+            }
+
+            return null;
+        }
         [System.Serializable]
-        class ScenePayload
+        public class ScenePayload
         {
             public string name;
             public string guid;
@@ -202,7 +174,7 @@ namespace Atlas.Kernel.Editor
         }
 
         [System.Serializable]
-        class GObject
+        public class GObject
         {
             public string id;
             public string name;
@@ -213,22 +185,14 @@ namespace Atlas.Kernel.Editor
         }
 
         [System.Serializable]
-        class ComponentInfo
+        public class ComponentInfo
         {
             public string type;
             public bool enabled;
         }
 
-        static string GetSceneHierarchyJson(UnityEngine.SceneManagement.Scene scene)
+        static string GenerateSceneJson(UnityEngine.SceneManagement.Scene scene, string guid)
         {
-            string scenePath = scene.path;
-            string guid = AssetDatabase.AssetPathToGUID(scenePath);
-            if (string.IsNullOrEmpty(guid))
-            {
-                Debug.LogError($"[Atlas] failed to get GUID for scene '{scene.name}' at path '{scenePath}'. Make sure the scene is saved.");
-                return null;
-            }
-
             var rootObjects = scene.GetRootGameObjects();
             var gobjs = new List<GObject>();
 
@@ -237,20 +201,20 @@ namespace Atlas.Kernel.Editor
                 TraverseGameObject(root, null, gobjs);
             }
 
-            var payload = new ScenePayload
+            var playload = new ScenePayload
             {
                 name = scene.name,
                 guid = guid,
                 gameObjects = gobjs
             };
-
-            return JsonUtility.ToJson(payload, true);
+            return JsonUtility.ToJson(playload, true);
         }
 
         static void TraverseGameObject(GameObject go, string parentId, List<GObject> list)
         {
-            string id = "gobj_" + go.GetInstanceID().ToString("X");
-            list.Add(new GObject
+            string id = $"gobj_{go.GetInstanceID():X}";
+
+            list.Add( new GObject
             {
                 id = id,
                 name = go.name,
@@ -268,21 +232,79 @@ namespace Atlas.Kernel.Editor
 
         static List<ComponentInfo> GetComponents(GameObject go)
         {
-            var comps = go.GetComponents<Component>();
             var list = new List<ComponentInfo>();
-            foreach (var comp in comps)
+            foreach (var comp in go.GetComponents<Component>())
             {
                 if (comp == null) continue;
-                var type = comp.GetType().Name;
-                bool enabled = true;
-                if (comp is Behaviour b) enabled = b.enabled;
+                bool enabled = comp is Behaviour b ? b.enabled : true;
                 list.Add(new ComponentInfo
                 {
-                    type = type,
+                    type = comp.GetType().Name,
                     enabled = enabled
                 });
             }
             return list;
+        }
+
+        static void RunCLI(string sceneName, string jsonContent)
+        {
+            string projectRoot = Application.dataPath.Replace("/Assets", "");
+            string atlasExePath = EditorPrefs.GetString("Atlas.ExePath", @"E:\ProjectAtlasOS\atlas.exe");
+            if (string.IsNullOrEmpty(atlasExePath) || !File.Exists(atlasExePath))
+            {
+                Debug.LogError("[Atlas] atlas.exe not found. Set path in Atlas/Settings.");
+                return;
+            }
+            Task.Run(() =>
+            {
+                string tempFile = Path.GetTempFileName() + ".json";
+                try
+                {
+                    File.WriteAllText(tempFile, jsonContent);
+                    Debug.Log($"[Atlas] Writing JSON to: {tempFile}");
+
+                    var process = new System.Diagnostics.Process();
+                    process.StartInfo.FileName = atlasExePath;
+                    process.StartInfo.Arguments = $"index scene --full --file \"{tempFile}\"";
+
+                    process.StartInfo.WorkingDirectory = projectRoot;
+                    process.StartInfo.UseShellExecute = false;
+                    process.StartInfo.RedirectStandardOutput = true;
+                    process.StartInfo.RedirectStandardError = true;
+                    process.Start();
+
+                    string stdout = process.StandardOutput.ReadToEnd();
+                    string stderr = process.StandardError.ReadToEnd();
+                    process.WaitForExit();
+
+                    int exitCode = process.ExitCode;
+                    UnityEditor.EditorApplication.delayCall += () =>
+                    {
+                        if (exitCode == 0)
+                        {
+                            Debug.Log($"[Atlas] ✅ Indexed scene '{sceneName}' with full hierarchy");
+                        }
+                        else
+                        {
+                            Debug.LogError($"[Atlas] ❌ Indexing failed: {stderr}");
+                        }
+                    };
+                }
+                catch (System.Exception ex)
+                {
+                    UnityEditor.EditorApplication.delayCall += () =>
+                    {
+                        Debug.LogError($"[Atlas] CLI error: {ex.Message}");
+                    };
+                }
+                finally
+                {
+                    if (File.Exists(tempFile))
+                    {
+                        try { File.Delete(tempFile); } catch { }
+                    }
+                }
+            });
         }
     }
 }

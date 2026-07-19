@@ -18,15 +18,15 @@ CREATE TABLE IF NOT EXISTS nodes (
 	guid TEXT UNIQUE,
 	name TEXT,
 	json TEXT,
-	created_at INTEGER DEFAULT (strftime('%s', 'now')),
-	updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+	created_at INTEGER,
+	updated_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS edges (
 	source TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
 	target TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
 	relationship TEXT NOT NULL,
 	properties JSON,
-	created_at INTEGER DEFAULT (strftime('%s', 'now')),
+	created_at INTEGER,
 	PRIMARY KEY (source, target, relationship)
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
@@ -62,11 +62,11 @@ func InsertNode(dbPath, id, typ, guid, name string) error {
 	}
 	defer db.Close()
 
-	updatedAt := time.Now().Unix()
+	now := time.Now().Unix()
 
 	_, err = db.Exec(`
-	INSERT OR REPLACE INTO nodes (id, type, guid, name, json, updated_at)
-	VALUES (?, ?, ?, ?, '{}', ?)`, id, typ, guid, name, updatedAt)
+	INSERT OR REPLACE INTO nodes (id, type, guid, name, json, created_at, updated_at)
+	VALUES (?, ?, ?, ?, '{}', ?, ?)`, id, typ, guid, name, now, now)
 	return err
 }
 
@@ -78,11 +78,11 @@ func InsertEdge(dbPath, srcID, tgtID, rel string) error {
 	}
 	defer db.Close()
 
-	createdAt := time.Now().Unix()
+	now := time.Now().Unix()
 
 	_, err = db.Exec(`
 	INSERT OR REPLACE INTO edges (source, target, relationship, properties, created_at)
-	VALUES (?, ?, ?, '{}', ?)`, srcID, tgtID, rel, createdAt)
+	VALUES (?, ?, ?, '{}', ?)`, srcID, tgtID, rel, now)
 	return err
 }
 
@@ -109,8 +109,9 @@ func GetNodeByGUID(dbPath, guid string) (*Node, error) {
 }
 
 type Node struct {
-	ID   string
-	Type string // "scene", "prefab", etc.
-	GUID string
-	Name string
+	ID        string
+	Type      string // "scene", "prefab", etc.
+	GUID      string
+	Name      string
+	CreatedAt int64
 }
