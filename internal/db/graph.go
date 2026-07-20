@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -117,6 +118,51 @@ func CountNodes(dbPath string) (int, error) {
 	var count int
 	err = db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&count)
 	return count, err
+}
+
+func GetNodesByType(dbPath, nodeType string) ([]Node, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT id, type, guid, name, created_at FROM nodes WHERE type = ? ORDER BY created_at DESC`, nodeType)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		var createdAt int64
+		if err := rows.Scan(&n.ID, &n.Type, &n.GUID, &n.Name, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+		n.CreatedAt = createdAt
+		nodes = append(nodes, n)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+func GetSceneCount(dbPath string) (int, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	var count int
+	err = db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE type = 'scene'`).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 type Node struct {

@@ -35,6 +35,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "query":
+		if err := core.QueryCmd(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -129,16 +134,14 @@ func handleIndexScene(args []string) {
 }
 
 func printUsage() {
-	fmt.Println("Atlas OS – Phase 0 MVP")
+	fmt.Println("Atlas OS – AI Game Development Operating System")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  atlas init [--dry-run]          Install Atlas Kernel in a Unity project")
-	fmt.Println("  atlas index node --type=<type> --guid=<guid> --name=<name>   Index a single node")
-	fmt.Println("  atlas index scene --full --file <path>   Index entire scene hierarchy from JSON file")
-	fmt.Println("  atlas verify                     Check indexed nodes in the database")
+	fmt.Println("  atlas init [--dry-run]          Install Atlas Kernel")
+	fmt.Println("  atlas index node ...             Index a single node")
+	fmt.Println("  atlas index scene --full ...     Index full scene hierarchy")
+	fmt.Println("  atlas verify                     Show indexed nodes")
+	fmt.Println("  atlas query scenes               List all indexed scenes")
+	fmt.Println("  atlas query gameobjects ...      List GameObjects in scene")
 	fmt.Println()
-	fmt.Println("Examples:")
-	fmt.Println("  atlas init --dry-run")
-	fmt.Println("  atlas index node --type=scene --guid=abc123 --name=\"MainMenu\"")
-	fmt.Println("  atlas index scene --full --file scene_data.json")
 }
