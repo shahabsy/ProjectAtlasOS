@@ -4,8 +4,6 @@ using System.IO;
 using System.Collections.Generic;
 using UnityEditor.SceneManagement;
 using System.Threading.Tasks;
-using Unity.VisualScripting.YamlDotNet.Core.Tokens;
-//using System.Diagnostics;
 
 namespace Atlas.Kernel.Editor
 {
@@ -23,10 +21,15 @@ namespace Atlas.Kernel.Editor
             {
                 if (!path.EndsWith(".unity")) continue;
 
-                // ✅ Get GUID from .meta file - ALWAYS reliable
+                Debug.Log($"[Atlas] Detected scene import: {path}");
                 string guid = GetGUIDFromMeta(path);
-                if (string.IsNullOrEmpty(guid)) return; // Error already logged
-
+                if (string.IsNullOrEmpty(guid))
+                {
+                    // continue to next asset — don't abort the whole batch
+                    Debug.LogWarning($"[Atlas] Skipping indexing for {path} — GUID not found.");
+                    continue;
+                }
+                Debug.Log($"[Atlas] Scene GUID: {guid} -> index into graph.db");
                 IndexScene(path, guid);
             }
 
@@ -125,21 +128,24 @@ namespace Atlas.Kernel.Editor
             }
 
             string json = GenerateSceneJson(scene, guid);
-            if (json == null)
+            if (string.IsNullOrEmpty(json))
             {
                 Debug.LogError("[Atlas] Failed to generate scene hierarchy JSON.");
                 return;
             }
 
-            RunCLI(scene.name, json); // Pass scene name for logging
+            RunCLI(scene.name, json);
         }
 
         static string GetGUIDFromMeta(string scenePath)
         {
-            // Normalize path to Assets/ format (Unity uses forward slashes)
-            string relativePath = scenePath.Replace("Assets/", "");
+            // Unity scene paths are usually relative like "Assets/Scenes/MyScene.unity"
+            string relativePath = scenePath;
+            if (relativePath.StartsWith("Assets/")) relativePath = relativePath.Substring("Assets/".Length);
 
-            // Construct meta file path (handles Windows/macOS/Linux paths)
+            // Make sure we use platform separators for Path.Combine
+            relativePath = relativePath.Replace('/', Path.DirectorySeparatorChar);
+
             string metaPath = Path.Combine(Application.dataPath, relativePath + ".meta");
 
             if (!File.Exists(metaPath))
@@ -151,10 +157,11 @@ namespace Atlas.Kernel.Editor
             try
             {
                 var lines = File.ReadAllLines(metaPath);
-                foreach (var line in lines)
+                foreach (var raw in lines)
                 {
+                    var line = raw.Trim();
                     if (line.StartsWith("guid:"))
-                        return line.Substring(5).Trim(); // "guid: d20ebab..." → "d20ebab..."
+                        return line.Substring("guid:".Length).Trim();
                 }
                 Debug.LogError($"[Atlas] No GUID found in .meta file: {scenePath}");
             }
@@ -165,11 +172,13 @@ namespace Atlas.Kernel.Editor
 
             return null;
         }
+
         [System.Serializable]
         public class ScenePayload
         {
             public string name;
             public string guid;
+            public string type = "scene";
             public List<GObject> gameObjects;
         }
 
@@ -177,6 +186,7 @@ namespace Atlas.Kernel.Editor
         public class GObject
         {
             public string id;
+            public string type = "gameobject";
             public string name;
             public string tag;
             public int layer;
@@ -187,63 +197,84 @@ namespace Atlas.Kernel.Editor
         [System.Serializable]
         public class ComponentInfo
         {
+            public string id;
             public string type;
             public bool enabled;
+            public string parent_id;
         }
 
-        static string GenerateSceneJson(UnityEngine.SceneManagement.Scene scene, string guid)
+        static string GenerateSceneJson(UnityEngine.SceneManagement.Scene scene, string sceneGuid)
         {
             var rootObjects = scene.GetRootGameObjects();
             var gobjs = new List<GObject>();
 
             foreach (var root in rootObjects)
             {
-                TraverseGameObject(root, null, gobjs);
+                TraverseGameObject(root, null, gobjs, sceneGuid);
             }
 
-            var playload = new ScenePayload
+            var payload = new ScenePayload
             {
                 name = scene.name,
-                guid = guid,
+                guid = sceneGuid,
                 gameObjects = gobjs
             };
-            return JsonUtility.ToJson(playload, true);
+            return JsonUtility.ToJson(payload, true);
         }
 
-        static void TraverseGameObject(GameObject go, string parentId, List<GObject> list)
+        static void TraverseGameObject(GameObject go, string parentId, List<GObject> list, string sceneGuid)
         {
-            string id = $"gobj_{go.GetInstanceID():X}";
+            // Create a deterministic id based on scene GUID + hierarchy path (sanitized)
+            string hierarchyPath = GetHierarchyPath(go);
+            string sanitized = hierarchyPath.Replace(' ', '_').Replace('/', '_');
+            string id = $"gobj_{sceneGuid}_{sanitized}";
 
-            list.Add( new GObject
+            list.Add(new GObject
             {
                 id = id,
                 name = go.name,
                 tag = go.tag,
                 layer = go.layer,
                 parent_id = parentId,
-                components = GetComponents(go)
+                components = GetComponents(go, id)
             });
 
             foreach (Transform child in go.transform)
             {
-                TraverseGameObject(child.gameObject, id, list);
+                TraverseGameObject(child.gameObject, id, list, sceneGuid);
             }
         }
 
-        static List<ComponentInfo> GetComponents(GameObject go)
+        static List<ComponentInfo> GetComponents(GameObject go, string parentId)
         {
             var list = new List<ComponentInfo>();
-            foreach (var comp in go.GetComponents<Component>())
+            foreach (var comp in go.GetComponents<UnityEngine.Component>())
             {
                 if (comp == null) continue;
                 bool enabled = comp is Behaviour b ? b.enabled : true;
+                string compId = $"{parentId}_{comp.GetType().Name}";
                 list.Add(new ComponentInfo
                 {
+                    id = compId,
                     type = comp.GetType().Name,
-                    enabled = enabled
+                    enabled = enabled,
+                    parent_id = parentId
                 });
             }
             return list;
+        }
+
+        // Returns a stable hierarchy path like "Root/Child/GrandChild"
+        static string GetHierarchyPath(GameObject go)
+        {
+            var parts = new List<string>();
+            Transform t = go.transform;
+            while (t != null)
+            {
+                parts.Insert(0, t.name);
+                t = t.parent;
+            }
+            return string.Join("/", parts);
         }
 
         static void RunCLI(string sceneName, string jsonContent)
@@ -280,14 +311,23 @@ namespace Atlas.Kernel.Editor
                     int exitCode = process.ExitCode;
                     UnityEditor.EditorApplication.delayCall += () =>
                     {
+                        Debug.Log($"[Atlas] stdout:\n{stdout}");
+                        if (!string.IsNullOrEmpty(stderr))
+                        {
+                            Debug.LogError($"[Atlas] stderr:\n{stderr}");
+                        }
                         if (exitCode == 0)
                         {
-                            Debug.Log($"[Atlas] ✅ Indexed scene '{sceneName}' with full hierarchy");
+                            Debug.Log($"[Atlas] Indexed scene '{sceneName}' with full hierarchy");
                         }
                         else
                         {
-                            Debug.LogError($"[Atlas] ❌ Indexing failed: {stderr}");
+                            Debug.LogError($"[Atlas] Indexing failed: {stderr}");
                         }
+
+                        bool keep = EditorPrefs.GetBool("Atlas.KeepTempJson", true);
+                        if (!keep && File.Exists(tempFile)) File.Delete(tempFile);
+                        else if (keep) Debug.Log($"[Atlas] Kept temp JSON at: {tempFile} for inspection.");
                     };
                 }
                 catch (System.Exception ex)
@@ -299,7 +339,9 @@ namespace Atlas.Kernel.Editor
                 }
                 finally
                 {
-                    if (File.Exists(tempFile))
+                    // If we are keeping JSON for debugging, do not delete.
+                    bool keep = EditorPrefs.GetBool("Atlas.KeepTempJson", true);
+                    if (!keep && File.Exists(tempFile))
                     {
                         try { File.Delete(tempFile); } catch { }
                     }

@@ -108,6 +108,17 @@ func GetNodeByGUID(dbPath, guid string) (*Node, error) {
 	return &Node{ID: id, Type: typ, GUID: guid, Name: name}, nil
 }
 
+func CountNodes(dbPath string) (int, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&count)
+	return count, err
+}
+
 type Node struct {
 	ID        string
 	Type      string // "scene", "prefab", etc.

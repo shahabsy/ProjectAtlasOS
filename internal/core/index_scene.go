@@ -34,6 +34,12 @@ func IndexFullScene(jsonData []byte) error {
 	if err := json.Unmarshal(jsonData, &scene); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
+	fmt.Printf("[Atlas DEBUG] Scene name: '%s'\n", scene.Name)
+	fmt.Printf("[Atlas DEBUG] GUID: '%s'\n", scene.Guid)
+	fmt.Printf("[Atlas DEBUG] Number of GameObjects: %d\n", len(scene.GameObjects))
+	for i, gobj := range scene.GameObjects {
+		fmt.Printf("  [%d] ID: %s, Name: '%s'\n", i, gobj.Id, gobj.Name)
+	}
 
 	if scene.Guid == "" {
 		return fmt.Errorf("scene GUID is empty. Make sure the scene is saved and the path is valid.")
@@ -58,8 +64,8 @@ func IndexFullScene(jsonData []byte) error {
 	for _, gobj := range scene.GameObjects {
 		gobNodeId := gobj.Id
 
-		// Insert GameObject node
-		if err := db.InsertNode(dbPath, gobNodeId, "gameobject", "", gobj.Name); err != nil {
+		// Insert GameObject node – use gobNodeId as unique guid
+		if err := db.InsertNode(dbPath, gobNodeId, "gameobject", gobNodeId, gobj.Name); err != nil {
 			return fmt.Errorf("failed to insert GameObject '%s': %w", gobj.Name, err)
 		}
 
@@ -84,13 +90,21 @@ func IndexFullScene(jsonData []byte) error {
 					compName = fmt.Sprintf("%s (%v)", comp.Type, name)
 				}
 			}
-			if err := db.InsertNode(dbPath, compNodeId, "component", "", compName); err != nil {
+			// Insert component node – use compNodeId as unique guid
+			if err := db.InsertNode(dbPath, compNodeId, "component", compNodeId, compName); err != nil {
 				return fmt.Errorf("failed to insert component: %w", err)
 			}
 			if err := db.InsertEdge(dbPath, gobNodeId, compNodeId, "HAS_COMPONENT"); err != nil {
 				return fmt.Errorf("failed to link component: %w", err)
 			}
 		}
+	}
+
+	count, err := db.CountNodes(dbPath)
+	if err != nil {
+		fmt.Printf("[Atlas] Total nodes in DB after indexing %d\n", count)
+	} else {
+		fmt.Printf("[Atlas] Failed to count nodes: %v\n", err)
 	}
 
 	fmt.Printf("✅ Indexed scene '%s' with %d GameObjects\n", scene.Name, len(scene.GameObjects))
