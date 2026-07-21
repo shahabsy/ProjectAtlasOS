@@ -20,6 +20,8 @@ func QueryCmd(args []string) error {
 		return listScenes()
 	case "gameobjects":
 		return listGameObjects(args[1:])
+	case "components":
+		return listComponents(args[1:])
 	default:
 		return fmt.Errorf("unknown query subcommand: %s. Use 'atlas query --help'", subCmd)
 	}
@@ -35,9 +37,10 @@ Usage:
   atlas query --help                Show this help message
 
 Examples:
-  atlas query scenes
-  atlas query gameobjects --scene=d20ebab...
-  atlas query components --gameobject=gobj_12345`)
+  	atlas query scenes
+  	atlas query gameobjects --scene=d20ebab...
+  	atlas query components --gameobject=gobj_12345
+	 atlas query components --gameobject=gobj_1ABCDEF`)
 	return nil
 }
 
@@ -116,10 +119,45 @@ func listGameObjects(args []string) error {
 		return fmt.Errorf("failed to query GameObjects: %w", err)
 	}
 
-	fmt.Printf("\n📦 GameObjects in '%s' (%d total):\n", sceneNode.Name, len(gobjs))
+	fmt.Printf("\nGameObjects in '%s' (%d total):\n", sceneNode.Name, len(gobjs))
 
 	for _, gobj := range gobjs {
 		fmt.Printf("  - %s (ID: %s)\n", gobj.Name, gobj.ID)
+	}
+
+	return nil
+}
+
+// listComponents shows all components on a GameObject
+func listComponents(args []string) error {
+	var gameObjID string
+
+	for i := 0; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "--gameobject=") {
+			gameObjID = strings.TrimPrefix(args[i], "--gameobject=")
+		}
+	}
+
+	if gameObjID == "" {
+		return fmt.Errorf("missing --gameobject=<id> argument. Use 'atlas query gameobjects' to find GameObjects")
+	}
+
+	projectRoot, err := findUnityProject()
+	if err != nil {
+		return err
+	}
+	dbPath := db.GetDBPath(projectRoot)
+
+	// Get components for this GameObject
+	comps, err := db.GetComponentsByGameObject(dbPath, gameObjID)
+	if err != nil {
+		return fmt.Errorf("failed to query components: %w", err)
+	}
+
+	fmt.Printf("\nComponents on '%s' (%d total):\n", gameObjID, len(comps))
+
+	for i, comp := range comps {
+		fmt.Printf("%2d. %s\n", i+1, comp.Name)
 	}
 
 	return nil

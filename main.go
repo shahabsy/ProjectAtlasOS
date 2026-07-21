@@ -143,5 +143,6 @@ func printUsage() {
 	fmt.Println("  atlas verify                     Show indexed nodes")
 	fmt.Println("  atlas query scenes               List all indexed scenes")
 	fmt.Println("  atlas query gameobjects ...      List GameObjects in scene")
+	fmt.Println("  atlas query components ...       List components on GameObject")
 	fmt.Println()
 }

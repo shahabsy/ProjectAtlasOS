@@ -165,6 +165,73 @@ func GetSceneCount(dbPath string) (int, error) {
 	return count, nil
 }
 
+func GetGameObjectsByScene(dbPath, sceneNodeID string) ([]Node, error) {
+	database, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer database.Close()
+
+	rows, err := database.Query(`
+		SELECT n.id, n.type, n.guid, n.name
+		FROM nodes n
+		JOIN edges e ON e.target = n.id WHERE e.source = ? AND e.relationship = 'CONTAINS' AND n.type = 'gameobject'
+		ORDER BY n.name`, sceneNodeID)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		if err := rows.Scan(&n.ID, &n.Type, &n.GUID, &n.Name); err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+		nodes = append(nodes, n)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+// GetComponentsByGameObject retrieves all component nodes for a GameObject by node ID
+func GetComponentsByGameObject(dbPath, gameObjNodeID string) ([]Node, error) {
+	database, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer database.Close()
+
+	rows, err := database.Query(`
+		SELECT n.id, n.type, n.guid, n.name
+		FROM nodes n
+		JOIN edges e ON e.target = n.id
+		WHERE e.source = ? AND e.relationship = 'HAS_COMPONENT'
+		ORDER BY n.name`, gameObjNodeID)
+	if err != nil {
+		return nil, fmt.Errorf("query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		if err := rows.Scan(&n.ID, &n.Type, &n.GUID, &n.Name); err != nil {
+			return nil, fmt.Errorf("scan failed: %w", err)
+		}
+		nodes = append(nodes, n)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return nodes, nil
+}
+
 type Node struct {
 	ID        string
 	Type      string // "scene", "prefab", etc.
