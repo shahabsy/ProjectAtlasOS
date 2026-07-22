@@ -40,6 +40,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+	case "analyze":
+		handleAnalyzeCmd(os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		printUsage()
@@ -133,16 +135,42 @@ func handleIndexScene(args []string) {
 	}
 }
 
+func handleAnalyzeCmd(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Use `atlas analyze lighting`")
+		return
+	}
+
+	subCmd := args[0]
+	switch subCmd {
+	case "lighting":
+		if err := core.AnalyzeLightingCmd(); err != nil {
+			fmt.Fprintf(os.Stderr, "❌ Error: %v\n", err)
+			os.Exit(1)
+		}
+	default:
+		fmt.Printf("Unknown analyze command: %s. Use 'atlas analyze lighting'\n", subCmd)
+	}
+}
+
 func printUsage() {
 	fmt.Println("Atlas OS – AI Game Development Operating System")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  atlas init [--dry-run]          Install Atlas Kernel")
-	fmt.Println("  atlas index node ...             Index a single node")
-	fmt.Println("  atlas index scene --full ...     Index full scene hierarchy")
-	fmt.Println("  atlas verify                     Show indexed nodes")
-	fmt.Println("  atlas query scenes               List all indexed scenes")
-	fmt.Println("  atlas query gameobjects ...      List GameObjects in scene")
-	fmt.Println("  atlas query components ...       List components on GameObject")
+	fmt.Println("  atlas init [--dry-run]          Install Atlas Kernel in Unity project")
+	fmt.Println("  atlas index node ...            Index a single node (scene, prefab, shader)")
+	fmt.Println("  atlas index scene --full ...    Index full scene hierarchy from JSON file")
+	fmt.Println("  atlas verify                    Show indexed nodes in database")
+	fmt.Println("  atlas query scenes              List all indexed scenes")
+	fmt.Println("  atlas query gameobjects ...     List GameObjects in a scene")
+	fmt.Println("  atlas query components ...      List components on a GameObject")
+	fmt.Println("  atlas analyze lighting          Analyze scene lighting setup")
 	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  atlas init --dry-run")
+	fmt.Println("  atlas index node --type=scene --guid=d20ebab... --name=\"MainMenu\"")
+	fmt.Println("  atlas index scene --full --file scene_data.json")
+	fmt.Println("  atlas query scenes")
+	fmt.Println("  atlas query gameobjects --scene=d20ebab...")
+	fmt.Println("  atlas analyze lighting")
 }
