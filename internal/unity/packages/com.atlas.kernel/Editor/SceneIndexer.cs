@@ -50,7 +50,7 @@ namespace Atlas.Kernel.Editor
                 return;
             }
 
-            string atlasExePath = EditorPrefs.GetString("Atlas.ExePath", @"E:\ProjectAtlasOS\atlas.exe");
+            string atlasExePath = EditorPrefs.GetString("Atlas.ExePath", @"E:\GameDevAI_Agent\ProjectAtlasOS\atlas.exe");
             if (string.IsNullOrEmpty(atlasExePath) || !File.Exists(atlasExePath))
             {
                 Debug.LogWarning($"[Atlas] atlas.exe not found. Set path in Atlas/Settings.");
