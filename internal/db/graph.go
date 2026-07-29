@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 	name TEXT,
 	json TEXT,
 	created_at INTEGER,
-	updated_at INTEGER
+	updated_at INTEGER,
+	last_indexed_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS edges (
 	source TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -66,8 +67,8 @@ func InsertNode(dbPath, id, typ, guid, name string) error {
 	now := time.Now().Unix()
 
 	_, err = db.Exec(`
-	INSERT OR REPLACE INTO nodes (id, type, guid, name, json, created_at, updated_at)
-	VALUES (?, ?, ?, ?, '{}', ?, ?)`, id, typ, guid, name, now, now)
+	INSERT OR REPLACE INTO nodes (id, type, guid, name, json, created_at, updated_at, last_indexed_at)
+	VALUES (?, ?, ?, ?, '{}', ?, ?, ?)`, id, typ, guid, name, now, now, now)
 	return err
 }
 
