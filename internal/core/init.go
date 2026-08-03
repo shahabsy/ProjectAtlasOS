@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/shahabsy/ProjectAtlasOS/internal/db"
 	"github.com/shahabsy/ProjectAtlasOS/internal/unity"
 	"github.com/shahabsy/ProjectAtlasOS/internal/utils"
 )
@@ -25,6 +26,11 @@ func Init(dryRun bool) error {
 		fmt.Println("\n Dry run complete -- no files written.")
 	} else {
 		fmt.Println("\n Atlas kernel installed successfully.")
+	}
+	// Migrate database
+	dbPath := db.GetDBPath(projectRoot)
+	if err := db.RunMigrations(dbPath); err != nil {
+		return fmt.Errorf("database migration failed: %w", err)
 	}
 	return nil
 }

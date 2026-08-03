@@ -1,8 +1,8 @@
 using UnityEditor;
 using UnityEngine;
+using UnityEditor.SceneManagement;
 using System.IO;
 using System.Collections.Generic;
-using UnityEditor.SceneManagement;
 using System.Threading.Tasks;
 
 namespace Atlas.Kernel.Editor
@@ -185,22 +185,53 @@ namespace Atlas.Kernel.Editor
         [System.Serializable]
         public class GObject
         {
-            public string id;
+            public string id; // Optional
+            public string globalId; // Primary
             public string type = "gameobject";
             public string name;
             public string tag;
             public int layer;
             public string parent_id;
+            public string prefab_guid;
             public List<ComponentInfo> components;
         }
 
         [System.Serializable]
         public class ComponentInfo
         {
-            public string id;
+            public string globalId;
             public string type;
             public bool enabled;
             public string parent_id;
+
+            // Script Resolution
+            public string script_guid;
+            public string class_name;
+            public string namespace_name;
+
+            // Serialized Field
+            public List<SerializedFieldInfo> serialized_fields;
+            public List<AssetReferenceInfo> asset_references;
+        }
+
+        [System.Serializable]
+        public class SerializedFieldInfo
+        {
+            public string name;
+            public string type;
+            public string value;
+            public string reference_type;
+            public string reference_id;
+            public string reference_path;
+        }
+
+        [System.Serializable]
+        public class AssetReferenceInfo
+        {
+            public string type;
+            public string guid;
+            public string name;
+            public string slot_name;
         }
 
         static string GenerateSceneJson(UnityEngine.SceneManagement.Scene scene, string sceneGuid)
@@ -225,46 +256,135 @@ namespace Atlas.Kernel.Editor
         static void TraverseGameObject(GameObject go, string parentId, List<GObject> list, string sceneGuid)
         {
             // Create a deterministic id based on scene GUID + hierarchy path (sanitized)
-            string hierarchyPath = GetHierarchyPath(go);
-            string sanitized = hierarchyPath.Replace(' ', '_').Replace('/', '_');
-            string id = $"gobj_{sceneGuid}_{sanitized}";
+            //string hierarchyPath = GetHierarchyPath(go);
+            //string sanitized = hierarchyPath.Replace(' ', '_').Replace('/', '_');
+            //string id = $"gobj_{sceneGuid}_{sanitized}";
 
-            list.Add(new GObject
+            // Stable Id using GlobalObjectId
+            string globalId = GetStableGameObjectId(go);
+
+            var gobj = new GObject
             {
-                id = id,
+                globalId = globalId,
                 name = go.name,
                 tag = go.tag,
                 layer = go.layer,
                 parent_id = parentId,
-                components = GetComponents(go, id)
-            });
+                components = GetComponents(go, globalId)
+            };
+            // Detect Prefab Instance
+            var prefabAsset = PrefabUtility.GetCorrespondingObjectFromSource(go);
+            if (prefabAsset != null)
+            {
+                string prefabPath = AssetDatabase.GetAssetPath(prefabAsset);
+                gobj.prefab_guid = AssetDatabase.AssetPathToGUID(prefabPath);
+            }
+            list.Add(gobj);
 
             foreach (Transform child in go.transform)
             {
-                TraverseGameObject(child.gameObject, id, list, sceneGuid);
+                TraverseGameObject(child.gameObject, globalId, list, sceneGuid);
             }
         }
+        static string GetStableGameObjectId(GameObject go)
+        {
+            var globalId = GlobalObjectId.GetGlobalObjectIdSlow(go);
+            return globalId.ToString();
+        }
 
-        static List<ComponentInfo> GetComponents(GameObject go, string parentId)
+        // This function needs to be checked again for inconsistencies in code
+        static List<ComponentInfo> GetComponents(GameObject go, string parentGlobalId)
         {
             var list = new List<ComponentInfo>();
             foreach (var comp in go.GetComponents<UnityEngine.Component>())
             {
                 if (comp == null) continue;
+                string globalId = GlobalObjectId.GetGlobalObjectIdSlow(comp).ToString();
                 bool enabled = comp is Behaviour b ? b.enabled : true;
-                string compId = $"{parentId}_{comp.GetType().Name}";
-                list.Add(new ComponentInfo
+                
+                var compInfo = new ComponentInfo
                 {
-                    id = compId,
+                    globalId = globalId,
                     type = comp.GetType().Name,
                     enabled = enabled,
-                    parent_id = parentId
-                });
+                    parent_id = parentGlobalId,
+                    serialized_fields = new List<SerializedFieldInfo>(),
+                    asset_references = new List<AssetReferenceInfo>()
+                };
+                // NomoBehavior Script + Serialized Fields
+                if (comp is MonoBehaviour mono)
+                {
+                    var script = MonoScript.FromMonoBehaviour(mono);
+                    if(script != null)
+                    {
+                        string scriptPath = AssetDatabase.GetAssetPath(script);
+                        compInfo.script_guid = AssetDatabase.AssetPathToGUID(scriptPath);
+
+                        compInfo.class_name = script.GetClass().Name;
+                        compInfo.namespace_name = script.GetClass().Namespace;
+
+                        // Extract serialized fields using SerializedObject
+                        var so = new SerializedObject(comp);
+                        var iterator = so.GetIterator();
+
+                        while (iterator.NextVisible(true))
+                        {
+                            if (iterator.propertyType == SerializedPropertyType.ObjectReference)
+                            {
+                                var objRef = iterator.objectReferenceValue;
+                                if(objRef != null)
+                                {
+                                    string refPath = AssetDatabase.GetAssetPath(objRef);
+                                    string refGuid = AssetDatabase.AssetPathToGUID(refPath);
+
+                                    compInfo.serialized_fields.Add(new SerializedFieldInfo
+                                    {
+                                        name = iterator.name,
+                                        type = objRef.GetType().Name,
+                                        reference_type = "asset",
+                                        reference_id = refGuid,
+                                        reference_path = refPath
+                                    });
+                                }
+                            } else if (iterator.propertyType == SerializedPropertyType.Float ||
+                            iterator.propertyType == SerializedPropertyType.Integer ||
+                            iterator.propertyType == SerializedPropertyType.String)
+                            {
+                                // this needs to be check for inconsistencies
+                                compInfo.serialized_fields.Add(new SerializedFieldInfo
+                                {
+                                    name = iterator.name,
+                                    type = iterator.type,
+                                    value = iterator.stringValue
+                                });
+                            }
+                        }
+                    }
+                }
+                // Renderer: Materials
+                if (comp is Renderer renderer)
+                {
+                    var materials = renderer.sharedMaterials;
+                    foreach(var mat in materials)
+                    {
+                        if (mat == null) continue;
+                        string matPath = AssetDatabase.GetAssetPath(mat);
+                        string matGuid = AssetDatabase.AssetPathToGUID(matPath);
+                        compInfo.asset_references.Add(new AssetReferenceInfo
+                        {
+                            type = "material",
+                            guid = matGuid,
+                            name = mat.name
+                        });
+                    }
+                }
+                list.Add(compInfo);
             }
             return list;
         }
 
         // Returns a stable hierarchy path like "Root/Child/GrandChild"
+        // Check if this function is useful or not
         static string GetHierarchyPath(GameObject go)
         {
             var parts = new List<string>();
@@ -280,7 +400,7 @@ namespace Atlas.Kernel.Editor
         static void RunCLI(string sceneName, string jsonContent)
         {
             string projectRoot = Application.dataPath.Replace("/Assets", "");
-            string atlasExePath = EditorPrefs.GetString("Atlas.ExePath", @"E:\ProjectAtlasOS\atlas.exe");
+            string atlasExePath = EditorPrefs.GetString("Atlas.ExePath", @"E:\GameDevAI_Agent\ProjectAtlasOS\atlas.exe");
             if (string.IsNullOrEmpty(atlasExePath) || !File.Exists(atlasExePath))
             {
                 Debug.LogError("[Atlas] atlas.exe not found. Set path in Atlas/Settings.");
@@ -324,7 +444,7 @@ namespace Atlas.Kernel.Editor
                         {
                             Debug.LogError($"[Atlas] Indexing failed: {stderr}");
                         }
-
+                        // need to check if these lines of code required or not
                         bool keep = EditorPrefs.GetBool("Atlas.KeepTempJson", true);
                         if (!keep && File.Exists(tempFile)) File.Delete(tempFile);
                         else if (keep) Debug.Log($"[Atlas] Kept temp JSON at: {tempFile} for inspection.");

@@ -83,10 +83,7 @@ func handleIndexNode(args []string) {
 		fmt.Println("Missing required arguments: --type, --guid, --name")
 		os.Exit(1)
 	}
-	if err := core.IndexNodeCmd(typ, guid, name); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	core.IndexNodeCmd([]string{"--type=" + typ, "--guid=" + guid, "--name=" + name})
 }
 func handleIndexScene(args []string) {
 	var full bool

@@ -16,9 +16,12 @@ const schemaContent = `
 CREATE TABLE IF NOT EXISTS nodes (
 	id TEXT PRIMARY KEY,
 	type TEXT NOT NULL,
-	guid TEXT UNIQUE,
+	guid TEXT,
+	global_id TEXT UNIQUE,
 	name TEXT,
 	json TEXT,
+	path TEXT,
+	metadata TEXT,
 	created_at INTEGER,
 	updated_at INTEGER,
 	last_indexed_at INTEGER
@@ -27,14 +30,15 @@ CREATE TABLE IF NOT EXISTS edges (
 	source TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
 	target TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
 	relationship TEXT NOT NULL,
-	properties JSON,
+	metadata TEXT,
 	created_at INTEGER,
 	PRIMARY KEY (source, target, relationship)
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type);
-CREATE INDEX IF NOT EXISTS idx_nodes_guid ON nodes(guid);
+CREATE INDEX IF NOT EXISTS idx_nodes_global_id ON nodes(global_id);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
+CREATE INDEX IF NOT EXISTS idx_edges_relationship ON edges(relationship);
 `
 
 func CreateDB(dbPath string) error {
@@ -52,12 +56,8 @@ func CreateDB(dbPath string) error {
 	return err
 }
 
-func GetDBPath(projectRoot string) string {
-	return filepath.Join(projectRoot, ".atlas", "graph.db")
-}
-
 // Insert Node adds or updates a node in the graph
-func InsertNode(dbPath, id, typ, guid, name string) error {
+func InsertNode(dbPath, id, typ, guid, globalId, name, path string) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
@@ -67,13 +67,13 @@ func InsertNode(dbPath, id, typ, guid, name string) error {
 	now := time.Now().Unix()
 
 	_, err = db.Exec(`
-	INSERT OR REPLACE INTO nodes (id, type, guid, name, json, created_at, updated_at, last_indexed_at)
-	VALUES (?, ?, ?, ?, '{}', ?, ?, ?)`, id, typ, guid, name, now, now, now)
+	INSERT OR REPLACE INTO nodes (id, type, guid, global_id, name, path, json, created_at, updated_at, last_indexed_at)
+	VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)`, id, typ, guid, globalId, name, path, now, now, now)
 	return err
 }
 
 // InsertEdge adds a relationship edge
-func InsertEdge(dbPath, srcID, tgtID, rel string) error {
+func InsertEdge(dbPath, srcID, tgtID, rel, metadata string) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
@@ -83,9 +83,24 @@ func InsertEdge(dbPath, srcID, tgtID, rel string) error {
 	now := time.Now().Unix()
 
 	_, err = db.Exec(`
-	INSERT OR REPLACE INTO edges (source, target, relationship, properties, created_at)
-	VALUES (?, ?, ?, '{}', ?)`, srcID, tgtID, rel, now)
+	INSERT OR REPLACE INTO edges (source, target, relationship, metadata, created_at)
+	VALUES (?, ?, ?, ?, ?)`, srcID, tgtID, rel, metadata, now)
 	return err
+}
+
+func GetDBPath(projectRoot string) string {
+	return filepath.Join(projectRoot, ".atlas", "graph.db")
+}
+
+func CountNodes(dbPath string) (int, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return 0, err
+	}
+	defer db.Close()
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&count)
+	return count, err
 }
 
 // GetNodeByGUID retrieves a node by its Unity GUID
@@ -108,17 +123,6 @@ func GetNodeByGUID(dbPath, guid string) (*Node, error) {
 	}
 
 	return &Node{ID: id, Type: typ, GUID: guid, Name: name}, nil
-}
-
-func CountNodes(dbPath string) (int, error) {
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return 0, err
-	}
-	defer db.Close()
-	var count int
-	err = db.QueryRow("SELECT COUNT(*) FROM nodes").Scan(&count)
-	return count, err
 }
 
 func GetNodesByType(dbPath, nodeType string) ([]Node, error) {
