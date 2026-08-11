@@ -5,9 +5,10 @@ import (
 	"fmt"
 
 	"github.com/shahabsy/ProjectAtlasOS/internal/db"
+	_ "modernc.org/sqlite"
 )
 
-// SceneData matches the JSON sent from Unity
+// ---------- Scene JSON structures ----------
 type SceneData struct {
 	Name        string           `json:"name"`
 	Guid        string           `json:"guid"`
@@ -18,69 +19,43 @@ type GameObjectData struct {
 	Id         string          `json:"id"`
 	GlobalId   string          `json:"globalId"`
 	Name       string          `json:"name"`
-	Tags       []string        `json:"tags"`
-	Layer      int             `json:"layer"`
 	ParentId   string          `json:"parent_id"`
 	PrefabGuid string          `json:"prefab_guid"`
 	Components []ComponentData `json:"components"`
 }
 
 type ComponentData struct {
-	GlobalId         string            `json:"globalId"`
-	Type             string            `json:"type"`
-	Enabled          bool              `json:"enabled"`
-	ParentId         string            `json:"parent_id"`
-	ScriptGuid       string            `json:"script_guid"`
-	ClassName        string            `json:"class_name"`
-	NamespaceName    string            `json:"namespace_name"`
-	SerializedFields []SerializedField `json:"serialized_fields"`
-	AssetReferences  []AssetReference  `json:"asset_references"`
+	GlobalId         string                `json:"globalId"`
+	Type             string                `json:"type"`
+	ClassName        string                `json:"class_name"`
+	ScriptGuid       string                `json:"script_guid"`
+	SerializedFields []SerializedFieldData `json:"serialized_fields"`
+	AssetReferences  []AssetReferenceData  `json:"asset_references"`
 }
 
-type SerializedField struct {
-	Name          string `json:"name"`
-	Type          string `json:"type"`
-	Value         string `json:"value"`
-	ReferenceType string `json:"reference_type"`
-	ReferenceId   string `json:"reference_id"`
-	ReferencePath string `json:"reference_path"`
+type SerializedFieldData struct {
+	Name        string `json:"name"`
+	ReferenceId string `json:"reference_id"`
 }
 
-type AssetReference struct {
-	Type     string `json:"type"`
-	Guid     string `json:"guid"`
-	Name     string `json:"name"`
-	SlotName string `json:"slot_name"`
+type AssetReferenceData struct {
+	Guid string `json:"guid"`
+	Type string `json:"type"`
+	Name string `json:"name"`
 }
 
+// findUnityProject is defined in init.go – do not redeclare here.
+
+// IndexFullScene indexes a Unity scene from its JSON representation.
 func IndexFullScene(jsonData []byte) error {
 	var scene SceneData
 	if err := json.Unmarshal(jsonData, &scene); err != nil {
 		return fmt.Errorf("invalid JSON: %w", err)
 	}
+
 	fmt.Printf("[Atlas DEBUG] Scene name: '%s'\n", scene.Name)
 	fmt.Printf("[Atlas DEBUG] GUID: '%s'\n", scene.Guid)
 	fmt.Printf("[Atlas DEBUG] Number of GameObjects: %d\n", len(scene.GameObjects))
-	projectRoot, err := findUnityProject()
-	if err != nil {
-		return err
-	}
-	dbPath := db.GetDBPath(projectRoot)
-
-	// 1. Insert Scene Node
-	sceneNodeId := "scene_" + scene.Guid[:8]
-	if err := db.InsertNode(dbPath, sceneNodeId, "scene", scene.Guid, scene.Guid, scene.Name, ""); err != nil {
-		return fmt.Errorf("failed to insert scene node: %w", err)
-	}
-	// 2. Track scripts, prefabs, assets for deduplication
-	scriptsMap := make(map[string]bool)
-	prefabsMap := make(map[string]bool)
-	assetsMap := make(map[string]bool)
-
-	// 3. Process GameObjects
-	for i, gobj := range scene.GameObjects {
-		fmt.Printf("  [%d] ID: %s, Name: '%s'\n", i, gobj.Id, gobj.Name)
-	}
 
 	if scene.Guid == "" {
 		return fmt.Errorf("scene GUID is empty. Make sure the scene is saved and the path is valid.")
@@ -89,111 +64,145 @@ func IndexFullScene(jsonData []byte) error {
 		return fmt.Errorf("scene GUID is too short: %s", scene.Guid)
 	}
 
-	// 2. Insert all GameObjects and components
-	for i, gobj := range scene.GameObjects {
-		fmt.Printf("[%d] Processing GameObject: %s (GlobalId: %s)\n", i, gobj.Name, gobj.GlobalId)
+	projectRoot, err := findUnityProject()
+	if err != nil {
+		return err
+	}
+	dbPath := db.GetDBPath(projectRoot)
 
-		gobNodeId := gobj.Id
+	conn, err := db.OpenWithBusyTimeout(dbPath, 5000)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer conn.Close()
+
+	if err := db.CreateDB(dbPath); err != nil {
+		return fmt.Errorf("failed to create database schema: %w", err)
+	}
+	if err := db.RunMigrations(dbPath); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	tx, err := db.Begin(conn)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer db.Rollback(tx)
+
+	// Scene node (using first 8 chars of GUID – it's short and unique)
+	sceneNodeId := "scene_" + scene.Guid[:8]
+	if err := db.InsertNodeTx(tx, sceneNodeId, "scene", scene.Guid, "", scene.Name, ""); err != nil {
+		return fmt.Errorf("failed to insert scene node: %w", err)
+	}
+
+	scriptsMap := make(map[string]bool)
+	prefabsMap := make(map[string]bool)
+	assetsMap := make(map[string]bool)
+
+	// Process GameObjects
+	for idx, gobj := range scene.GameObjects {
+		// Use the full GlobalId as the node ID – guaranteed unique
+		gobNodeId := gobj.GlobalId
 		if gobNodeId == "" {
-			gobNodeId = fmt.Sprintf("gobj_fallback_%d", i)
-			fmt.Printf("[Atlas Warn] No stable ID for game objects '%s'", gobj.Name)
+			gobNodeId = fmt.Sprintf("gobj_fallback_%d", idx)
+			fmt.Printf("[Atlas WARN] No GlobalId for GameObject '%s', using fallback.\n", gobj.Name)
 		}
-		fmt.Printf("Inserting GameObject with ID: %s\n", gobNodeId)
-		// Insert GameObject node – use gobNodeId as unique guid
-		if err := db.InsertNode(dbPath, gobNodeId, "gameobject", "", gobj.GlobalId, gobj.Name, ""); err != nil {
+
+		if err := db.InsertNodeTx(tx, gobNodeId, "gameobject", "", gobj.GlobalId, gobj.Name, ""); err != nil {
 			return fmt.Errorf("failed to insert GameObject '%s': %w", gobj.Name, err)
 		}
-
-		// Edge: scene CONTAINS gameobject
-		if err := db.InsertEdge(dbPath, sceneNodeId, gobNodeId, "CONTAINS", ""); err != nil {
+		if err := db.InsertEdgeTx(tx, sceneNodeId, gobNodeId, "CONTAINS", ""); err != nil {
 			return fmt.Errorf("failed to link scene to GameObject: %w", err)
 		}
-
-		// Edge: parent-child relationship
 		if gobj.ParentId != "" {
-			if err := db.InsertEdge(dbPath, gobj.ParentId, gobNodeId, "CHILD_OF", ""); err != nil {
+			if err := db.InsertEdgeTx(tx, gobj.ParentId, gobNodeId, "CHILD_OF", ""); err != nil {
 				return fmt.Errorf("failed to link parent-child: %w", err)
 			}
 		}
 		if gobj.PrefabGuid != "" {
 			prefabsMap[gobj.PrefabGuid] = true
-			prefabNodeId := "prefab_" + gobj.PrefabGuid[:8]
-			if err := db.InsertNode(dbPath, prefabNodeId, "prefab", gobj.PrefabGuid, "", gobj.Name, ""); err != nil {
-				return fmt.Errorf("failed to insert prefab node:%w", err)
+			prefabNodeId := "prefab_" + gobj.PrefabGuid // full GUID
+			if err := db.InsertNodeTx(tx, prefabNodeId, "prefab", gobj.PrefabGuid, "", gobj.Name, ""); err != nil {
+				return fmt.Errorf("failed to insert prefab node: %w", err)
 			}
-			if err := db.InsertEdge(dbPath, gobNodeId, prefabNodeId, "INSTANCE_OF", ""); err != nil {
+			if err := db.InsertEdgeTx(tx, gobNodeId, prefabNodeId, "INSTANCE_OF", ""); err != nil {
 				return fmt.Errorf("failed to link GameObject to prefab: %w", err)
 			}
 		}
-		// 4. Process Components
-		for i, comp := range gobj.Components {
-			compNodeId := comp.GlobalId
-			if compNodeId == "" {
-				compNodeId = fmt.Sprintf("comp_fallback_%s", i)
-				fmt.Printf("[Atlas Warn] No GlobalId for component '%s', using fallback.\n", comp.Type)
+
+		// Process Components
+		for _, comp := range gobj.Components {
+			if len(comp.GlobalId) < 8 {
+				fmt.Printf("[Atlas WARN] Component GlobalId too short: '%s', skipping\n", comp.GlobalId)
+				continue
 			}
-			if err := db.InsertNode(dbPath, compNodeId, "component", "", comp.GlobalId, comp.Type, ""); err != nil {
+			// Use the full GlobalId as the component ID
+			compNodeId := comp.GlobalId
+			if err := db.InsertNodeTx(tx, compNodeId, "component", "", comp.GlobalId, comp.Type, ""); err != nil {
 				return fmt.Errorf("failed to insert component '%s': %w", comp.Type, err)
 			}
-			if err := db.InsertEdge(dbPath, gobNodeId, compNodeId, "HAS_COMPONENT", ""); err != nil {
+			if err := db.InsertEdgeTx(tx, gobNodeId, compNodeId, "HAS_COMPONENT", ""); err != nil {
 				return fmt.Errorf("failed to link component to GameObject: %w", err)
 			}
 
-			// Scripts
+			// Script Edge
 			if comp.ScriptGuid != "" {
 				scriptsMap[comp.ScriptGuid] = true
-				scriptNodeId := "script_" + comp.ScriptGuid[:8]
-				if err := db.InsertNode(dbPath, scriptNodeId, "script", comp.ScriptGuid, "", comp.ClassName, ""); err != nil {
+				scriptNodeId := "script_" + comp.ScriptGuid
+				if err := db.InsertNodeTx(tx, scriptNodeId, "script", comp.ScriptGuid, "", comp.ClassName, ""); err != nil {
 					return fmt.Errorf("failed to insert script node: %w", err)
 				}
-				if err := db.InsertEdge(dbPath, compNodeId, scriptNodeId, "USES_SCRIPT", ""); err != nil {
+				if err := db.InsertEdgeTx(tx, compNodeId, scriptNodeId, "USES_SCRIPT", ""); err != nil {
 					return fmt.Errorf("failed to link component to script: %w", err)
 				}
+				fmt.Printf("[Atlas DEBUG] Added USES_SCRIPT edge from %s to %s\n", compNodeId, scriptNodeId)
 			}
 
 			// Serialized Fields
 			for _, field := range comp.SerializedFields {
 				fieldNodeId := compNodeId + "_field_" + field.Name
-				if err := db.InsertNode(dbPath, fieldNodeId, "serialized_field", "", "", field.Name, ""); err != nil {
+				if err := db.InsertNodeTx(tx, fieldNodeId, "serialized_field", "", "", field.Name, ""); err != nil {
 					return fmt.Errorf("failed to insert serialized field node: %w", err)
 				}
-				if err := db.InsertEdge(dbPath, compNodeId, fieldNodeId, "HAS_FIELD", ""); err != nil {
+				if err := db.InsertEdgeTx(tx, compNodeId, fieldNodeId, "HAS_FIELD", ""); err != nil {
 					return fmt.Errorf("failed to link serialized field to component: %w", err)
 				}
 				if field.ReferenceId != "" {
-					targetNodeId := field.ReferenceId
-					if len(targetNodeId) > 32 {
-						targetNodeId = "asset_" + targetNodeId[:8]
-					} else {
-						targetNodeId = "node_" + targetNodeId
+					// Insert asset node with prefix "asset_"
+					assetNodeId := "asset_" + field.ReferenceId
+					// Use INSERT OR IGNORE to avoid duplicate conflicts (if the asset already exists)
+					// But we want to keep the data consistent, so we use INSERT OR REPLACE.
+					if err := db.InsertNodeTx(tx, assetNodeId, "asset", field.ReferenceId, "", field.Name, ""); err != nil {
+						return fmt.Errorf("failed to insert asset node for reference '%s': %w", field.ReferenceId, err)
 					}
 					assetsMap[field.ReferenceId] = true
-					if err := db.InsertEdge(dbPath, fieldNodeId, targetNodeId, "REFERENCES", ""); err != nil {
-						return fmt.Errorf("failed to link serialized field to asset: %w", err)
+					if err := db.InsertEdgeTx(tx, fieldNodeId, assetNodeId, "REFERENCES", ""); err != nil {
+						return fmt.Errorf("failed to link serialized field to asset (target: %s, ref: %s): %w", assetNodeId, field.ReferenceId, err)
 					}
 				}
 			}
 
-			// Asset References (materials, textures, shaders, etc.)
+			// Asset References (may update existing asset nodes with correct type/name)
 			for _, assetRef := range comp.AssetReferences {
+				if len(assetRef.Guid) < 8 {
+					fmt.Printf("[Atlas WARN] Asset GUID too short: '%s', skipping\n", assetRef.Guid)
+					continue
+				}
 				assetsMap[assetRef.Guid] = true
-				assetNodeId := "asset_" + assetRef.Guid[:8]
-				if err := db.InsertNode(dbPath, assetNodeId, assetRef.Type, assetRef.Guid, "", assetRef.Name, ""); err != nil {
-					return fmt.Errorf("failed to link serialized field to asset: %w", err)
+				assetNodeId := "asset_" + assetRef.Guid
+				if err := db.InsertNodeTx(tx, assetNodeId, assetRef.Type, assetRef.Guid, "", assetRef.Name, ""); err != nil {
+					return fmt.Errorf("failed to insert asset node: %w", err)
 				}
 				rel := "USES_" + assetRef.Type
-				if err := db.InsertEdge(dbPath, compNodeId, assetNodeId, rel, ""); err != nil {
+				if err := db.InsertEdgeTx(tx, compNodeId, assetNodeId, rel, ""); err != nil {
 					return fmt.Errorf("failed to link asset: %w", err)
 				}
 			}
 		}
 	}
-	// 5. Optionally, you can log the counts of unique scripts, prefabs, and assets
-	count, err := db.CountNodes(dbPath)
-	if err != nil {
-		fmt.Printf("[Atlas] Total nodes in DB after indexing %d\n", count)
-	} else {
-		fmt.Printf("[Atlas] Failed to count nodes: %v\n", err)
+
+	if err := db.CommitTx(tx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	fmt.Printf("✅ Indexed scene '%s' with %d GameObjects\n", scene.Name, len(scene.GameObjects))

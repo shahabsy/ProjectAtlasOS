@@ -27,8 +27,14 @@ func Init(dryRun bool) error {
 	} else {
 		fmt.Println("\n Atlas kernel installed successfully.")
 	}
-	// Migrate database
+	// Ensure database schema exista and run migration
 	dbPath := db.GetDBPath(projectRoot)
+
+	// Craete database schema if not present
+	if err := db.CreateDB(dbPath); err != nil {
+		return fmt.Errorf("database creation failed: %w", err)
+	}
+	// Migrate database
 	if err := db.RunMigrations(dbPath); err != nil {
 		return fmt.Errorf("database migration failed: %w", err)
 	}
