@@ -6,6 +6,7 @@ import (
 
 	"github.com/shahabsy/ProjectAtlasOS/internal/query"
 	"github.com/shahabsy/ProjectAtlasOS/internal/statistics"
+	"github.com/shahabsy/ProjectAtlasOS/internal/tools"
 )
 
 func main() {
@@ -17,7 +18,7 @@ func main() {
 	// Initialize Statistics Engine
 	stats := statistics.NewEngine(q)
 
-	fmt.Println("=== ATLAS STACK TEST ===\n")
+	fmt.Println("=== ATLAS STACK TEST ====")
 
 	// ------------------------------------------------------------
 	// 1. QUERY ENGINE TESTS
@@ -392,7 +393,7 @@ func main() {
 	// 2. STATISTICS ENGINE TESTS
 	// ------------------------------------------------------------
 
-	fmt.Println("=== STATISTICS ENGINE TESTS ===\n")
+	fmt.Println("=== STATISTICS ENGINE TESTS ===")
 
 	// 2.1 ProjectSummary
 	fmt.Println("2.1 ProjectSummary()")
@@ -416,4 +417,106 @@ func main() {
 	}
 
 	fmt.Println("=== ALL TESTS COMPLETED ===")
+
+	// 3. TOOL RUNTIME TESTS
+	fmt.Println("\n=== TOOL RUNTIME TESTS ===")
+
+	// Reuse the existing engines
+	toolCtx := tools.NewContext(q, stats) // q is *query.Engine, stats is *statistics.Engine
+	registry := tools.NewToolRegistry(toolCtx)
+
+	// 3.1 ListScenes
+	scenesResp, err := registry.Scene.ListScenes()
+	if err != nil {
+		log.Fatalf("ListScenes: %v", err)
+	}
+	fmt.Printf("3.1 ListScenes: %d scenes\n", len(scenesResp.Scenes))
+
+	// 3.2 DescribeScene
+	if len(scenesResp.Scenes) > 0 {
+		sceneID := scenesResp.Scenes[0].ID
+		describeResp, err := registry.Scene.DescribeScene(sceneID)
+		if err != nil {
+			log.Fatalf("DescribeScene: %v", err)
+		}
+		fmt.Printf("3.2 DescribeScene: %s | GO=%d | Scripts=%d | Warnings=%v\n",
+			describeResp.Scene.Name,
+			describeResp.Statistics.GameObjectCount,
+			describeResp.Statistics.ScriptCount,
+			describeResp.Warnings)
+	}
+
+	// 3.3 FindGameObjects
+	if len(scenesResp.Scenes) > 0 {
+		findResp, err := registry.GameObject.FindGameObjects(tools.FindGameObjectsRequest{
+			SceneID: scenesResp.Scenes[0].ID,
+			Name:    "Camera",
+		})
+		if err != nil {
+			log.Fatalf("FindGameObjects: %v", err)
+		}
+		fmt.Printf("3.3 FindGameObjects('Camera'): %d found\n", len(findResp.GameObjects))
+
+		// 3.4 GetHierarchy
+		if len(findResp.GameObjects) > 0 {
+			hierResp, err := registry.GameObject.GetGameObjectHierarchy(findResp.GameObjects[0].ID)
+			if err != nil {
+				log.Fatalf("GetHierarchy: %v", err)
+			}
+			fmt.Printf("3.4 Hierarchy(%s): children=%d parents=%d | Warnings=%v\n",
+				hierResp.GameObject.Name,
+				len(hierResp.Children),
+				len(hierResp.Parents),
+				hierResp.Warnings)
+		}
+	}
+
+	// 3.5 FindScripts
+	scriptResp, err := registry.Script.FindScripts(tools.FindScriptsRequest{Name: "UIManager"})
+	if err != nil {
+		log.Fatalf("FindScripts: %v", err)
+	}
+	fmt.Printf("3.5 FindScripts('UIManager'): %d found\n", len(scriptResp.Scripts))
+
+	// 3.6 GetGameObjectsUsingScript
+	if len(scriptResp.Scripts) > 0 {
+		usageResp, err := registry.Script.GetGameObjectsUsingScript(tools.GetGameObjectsUsingScriptRequest{
+			ScriptID: scriptResp.Scripts[0].ID,
+		})
+		if err != nil {
+			log.Fatalf("GetGameObjectsUsingScript: %v", err)
+		}
+		fmt.Printf("3.6 GetGameObjectsUsingScript: %d GameObjects\n", len(usageResp.GameObjects))
+	}
+
+	// 3.7 ListAssets
+	assetsResp, err := registry.Asset.ListAssets(tools.ListAssetsRequest{})
+	if err != nil {
+		log.Fatalf("ListAssets: %v", err)
+	}
+	fmt.Printf("3.7 ListAssets: %d assets\n", len(assetsResp.Assets))
+
+	// 3.8 ProjectStats
+	projStatsResp, err := registry.Stats.ProjectStats(tools.ProjectStatsRequest{})
+	if err != nil {
+		log.Fatalf("ProjectStats: %v", err)
+	}
+	fmt.Printf("3.8 ProjectStats: scenes=%d gobjs=%d scripts=%d assets=%d\n",
+		projStatsResp.Summary.TotalScenes,
+		projStatsResp.Summary.TotalGameObjects,
+		projStatsResp.Summary.UniqueScripts,
+		projStatsResp.Summary.TotalAssets)
+
+	// 3.9 SceneStats
+	if len(scenesResp.Scenes) > 0 {
+		sceneStatsResp, err := registry.Stats.SceneStats(tools.SceneStatsRequest{
+			SceneID: scenesResp.Scenes[0].ID,
+		})
+		if err != nil {
+			log.Fatalf("SceneStats: %v", err)
+		}
+		fmt.Printf("3.9 SceneStats: GO=%d Scripts=%d\n",
+			sceneStatsResp.Statistics.GameObjectCount,
+			sceneStatsResp.Statistics.ScriptCount)
+	}
 }
