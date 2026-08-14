@@ -14,6 +14,7 @@ const schemaContent = `
 CREATE TABLE IF NOT EXISTS nodes (
 	id TEXT PRIMARY KEY,
 	type TEXT NOT NULL,
+	sub_type TEXT,                  -- Added: semantic type (e.g., "Transform", "Rigidbody")
 	guid TEXT,
 	global_id TEXT UNIQUE,
 	name TEXT,
@@ -37,7 +38,35 @@ CREATE INDEX IF NOT EXISTS idx_nodes_global_id ON nodes(global_id);
 CREATE INDEX IF NOT EXISTS idx_edges_source ON edges(source);
 CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target);
 CREATE INDEX IF NOT EXISTS idx_edges_relationship ON edges(relationship);
+-- Additional indexes for performance
+CREATE INDEX IF NOT EXISTS idx_nodes_sub_type ON nodes(sub_type);
+CREATE INDEX IF NOT EXISTS idx_edges_source_rel ON edges(source, relationship);
+CREATE INDEX IF NOT EXISTS idx_edges_target_rel ON edges(target, relationship);
 `
+
+type Node struct {
+	ID          string
+	Type        string // scene, gameobject, component, script, assets, prefab etc.
+	SubType     string // Transform, Camera, Texture, etc.
+	GUID        string
+	GlobalID    string
+	Name        string
+	Path        string
+	Metadata    string
+	JSON        string
+	CreatedAt   int64
+	UpdatedAt   int64
+	LastIndexed int64
+}
+
+// Edge represents a relationship between two nodes.
+type Edge struct {
+	SourceID     string
+	TargetID     string
+	Relationship string
+	Metadata     string
+	CreatedAt    int64
+}
 
 func CreateDB(dbPath string) error {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
@@ -52,18 +81,18 @@ func CreateDB(dbPath string) error {
 	return err
 }
 
-// ---------- Path‑based (non‑transaction) operations ----------
-func InsertNode(dbPath, id, typ, guid, globalId, name, path string) error {
+// InsertNode (non‑transaction) with sub_type.
+func InsertNode(dbPath, id, typ, subType, guid, globalId, name, path string) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-
 	now := time.Now().Unix()
 	_, err = db.Exec(`
-	INSERT OR REPLACE INTO nodes (id, type, guid, global_id, name, path, json, created_at, updated_at, last_indexed_at)
-	VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)`, id, typ, guid, globalId, name, path, now, now, now)
+		INSERT OR REPLACE INTO nodes (id, type, sub_type, guid, global_id, name, path, json, created_at, updated_at, last_indexed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)`,
+		id, typ, subType, guid, globalId, name, path, now, now, now)
 	return err
 }
 
@@ -73,7 +102,6 @@ func InsertEdge(dbPath, srcID, tgtID, rel, metadata string) error {
 		return err
 	}
 	defer db.Close()
-
 	now := time.Now().Unix()
 	_, err = db.Exec(`
 	INSERT OR REPLACE INTO edges (source, target, relationship, metadata, created_at)
@@ -81,19 +109,16 @@ func InsertEdge(dbPath, srcID, tgtID, rel, metadata string) error {
 	return err
 }
 
-// ---------- Transaction‑based operations (renamed to avoid collision) ----------
+// ---------- Transaction‑based operations ----------
 func OpenWithBusyTimeout(dbPath string, timeoutMs int) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}
-	// Enable foreign key constraints
 	if _, err = db.Exec("PRAGMA foreign_keys = ON"); err != nil {
 		db.Close()
 		return nil, err
 	}
-
-	// Set busy timeout
 	if _, err = db.Exec(fmt.Sprintf("PRAGMA busy_timeout = %d", timeoutMs)); err != nil {
 		db.Close()
 		return nil, err
@@ -113,20 +138,18 @@ func CommitTx(tx *sql.Tx) error {
 	return tx.Commit()
 }
 
-// InsertNodeTx inserts a node using an existing transaction.
-func InsertNodeTx(tx *sql.Tx, id, typ, guid, globalId, name, path string) error {
+func InsertNodeTx(tx *sql.Tx, id, typ, subType, guid, globalId, name, path string) error {
 	if globalId == "" {
 		globalId = id
 	}
 	now := time.Now().Unix()
 	_, err := tx.Exec(`
-		INSERT OR REPLACE INTO nodes (id, type, guid, global_id, name, path, json, created_at, updated_at, last_indexed_at)
-		VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)`,
-		id, typ, guid, globalId, name, path, now, now, now)
+		INSERT OR REPLACE INTO nodes (id, type, sub_type, guid, global_id, name, path, json, created_at, updated_at, last_indexed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)`,
+		id, typ, subType, guid, globalId, name, path, now, now, now)
 	return err
 }
 
-// InsertEdgeTx inserts an edge using an existing transaction.
 func InsertEdgeTx(tx *sql.Tx, srcID, tgtID, rel, metadata string) error {
 	now := time.Now().Unix()
 	_, err := tx.Exec(`
@@ -136,7 +159,7 @@ func InsertEdgeTx(tx *sql.Tx, srcID, tgtID, rel, metadata string) error {
 	return err
 }
 
-// ---------- Query functions (err declarations fixed) ----------
+// ---------- Query functions ----------
 func GetDBPath(projectRoot string) string {
 	return filepath.Join(projectRoot, ".atlas", "graph.db")
 }
@@ -152,6 +175,39 @@ func CountNodes(dbPath string) (int, error) {
 	return count, err
 }
 
+func GetNodeByID(dbPath, id string) (*Node, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	var n Node
+	var path, metadata, jsonStr sql.NullString
+	var globalID sql.NullString
+
+	err = db.QueryRow(`
+		SELECT id, type, sub_type, guid, global_id, name, path, metadata, json,
+		       created_at, updated_at, last_indexed_at
+		FROM nodes WHERE id = ?
+	`, id).Scan(
+		&n.ID, &n.Type, &n.SubType, &n.GUID, &globalID, &n.Name,
+		&path, &metadata, &jsonStr,
+		&n.CreatedAt, &n.UpdatedAt, &n.LastIndexed,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	n.GlobalID = globalID.String
+	n.Path = path.String
+	n.Metadata = metadata.String
+	n.JSON = jsonStr.String
+	return &n, nil
+}
+
 func GetNodeByGUID(dbPath, guid string) (*Node, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -164,11 +220,11 @@ func GetNodeByGUID(dbPath, guid string) (*Node, error) {
 	var globalID sql.NullString
 
 	err = db.QueryRow(`
-		SELECT id, type, guid, global_id, name, path, metadata, json,
+		SELECT id, type, sub_type, guid, global_id, name, path, metadata, json,
 		       created_at, updated_at, last_indexed_at
 		FROM nodes WHERE guid = ?
 	`, guid).Scan(
-		&n.ID, &n.Type, &n.GUID, &globalID, &n.Name,
+		&n.ID, &n.Type, &n.SubType, &n.GUID, &globalID, &n.Name,
 		&path, &metadata, &jsonStr,
 		&n.CreatedAt, &n.UpdatedAt, &n.LastIndexed,
 	)
@@ -193,7 +249,7 @@ func GetNodesByType(dbPath, nodeType string) ([]Node, error) {
 	defer db.Close()
 
 	rows, err := db.Query(`
-		SELECT id, type, guid, global_id, name, path, metadata, json,
+		SELECT id, type, sub_type, guid, global_id, name, path, metadata, json,
 		       created_at, updated_at, last_indexed_at
 		FROM nodes WHERE type = ? ORDER BY created_at DESC
 	`, nodeType)
@@ -207,9 +263,8 @@ func GetNodesByType(dbPath, nodeType string) ([]Node, error) {
 		var n Node
 		var path, metadata, jsonStr sql.NullString
 		var globalID sql.NullString
-
 		if err := rows.Scan(
-			&n.ID, &n.Type, &n.GUID, &globalID, &n.Name,
+			&n.ID, &n.Type, &n.SubType, &n.GUID, &globalID, &n.Name,
 			&path, &metadata, &jsonStr,
 			&n.CreatedAt, &n.UpdatedAt, &n.LastIndexed,
 		); err != nil {
@@ -233,7 +288,6 @@ func GetSceneCount(dbPath string) (int, error) {
 		return 0, fmt.Errorf("failed to open database: %w", err)
 	}
 	defer db.Close()
-
 	var count int
 	err = db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE type = 'scene'`).Scan(&count)
 	if err != nil {
@@ -252,8 +306,10 @@ func GetGameObjectsByScene(dbPath, sceneNodeID string) ([]Node, error) {
 	rows, err := db.Query(`
 		SELECT n.id, n.type, n.guid, n.name
 		FROM nodes n
-		JOIN edges e ON e.target = n.id WHERE e.source = ? AND e.relationship = 'CONTAINS' AND n.type = 'gameobject'
-		ORDER BY n.name`, sceneNodeID)
+		JOIN edges e ON e.target = n.id
+		WHERE e.source = ? AND e.relationship = 'CONTAINS' AND n.type = 'gameobject'
+		ORDER BY n.name
+	`, sceneNodeID)
 	if err != nil {
 		return nil, fmt.Errorf("query failed: %w", err)
 	}
@@ -302,8 +358,7 @@ func GetComponentsByGameObject(dbPath, gameObjNodeID string) ([]Node, error) {
 		if err := rows.Scan(&n.ID, &n.Type, &n.GUID, &n.Name, &scriptID); err != nil {
 			return nil, fmt.Errorf("scan failed: %w", err)
 		}
-		// Store the script ID in the node's metadata field (temporary hack)
-		// Better: extend the Node struct with a ScriptID field.
+		// Store script ID in Metadata for now
 		n.Metadata = scriptID
 		nodes = append(nodes, n)
 	}
@@ -313,66 +368,79 @@ func GetComponentsByGameObject(dbPath, gameObjNodeID string) ([]Node, error) {
 	return nodes, nil
 }
 
-type Node struct {
-	ID          string
-	Type        string
-	GUID        string
-	GlobalID    string
-	Name        string
-	Path        string
-	Metadata    string
-	JSON        string
-	CreatedAt   int64
-	UpdatedAt   int64
-	LastIndexed int64
-}
+// ---------- New semantic query functions ----------
 
-// ---------- Edge query functions ----------
-
-// Edge represents a relationship between two nodes.
-type Edge struct {
-	SourceID     string
-	TargetID     string
-	Relationship string
-	Metadata     string
-	CreatedAt    int64
-}
-
-// GetNodeByID retrieves a node by its ID.
-func GetNodeByID(dbPath, id string) (*Node, error) {
+func GetComponentsByType(dbPath, componentType string) ([]Node, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		return nil, err
 	}
 	defer db.Close()
 
-	var n Node
-	var path, metadata, jsonStr sql.NullString
-	var globalID sql.NullString
-
-	err = db.QueryRow(`
-		SELECT id, type, guid, global_id, name, path, metadata, json,
-		       created_at, updated_at, last_indexed_at
-		FROM nodes WHERE id = ?
-	`, id).Scan(
-		&n.ID, &n.Type, &n.GUID, &globalID, &n.Name,
-		&path, &metadata, &jsonStr,
-		&n.CreatedAt, &n.UpdatedAt, &n.LastIndexed,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
+	rows, err := db.Query(`
+		SELECT id, type, sub_type, guid, name, created_at, updated_at, last_indexed_at
+		FROM nodes
+		WHERE type = 'component' AND COALESCE(sub_type, type) = ?
+		ORDER BY name
+	`, componentType)
 	if err != nil {
 		return nil, err
 	}
-	n.GlobalID = globalID.String
-	n.Path = path.String
-	n.Metadata = metadata.String
-	n.JSON = jsonStr.String
-	return &n, nil
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		if err := rows.Scan(&n.ID, &n.Type, &n.SubType, &n.GUID, &n.Name,
+			&n.CreatedAt, &n.UpdatedAt, &n.LastIndexed); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, n)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return nodes, nil
 }
 
-// GetEdgesBySource returns all edges where the given node is the source.
+func GetGameObjectsWithComponentType(dbPath, componentType string) ([]Node, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT gobj.id, gobj.type, gobj.sub_type, gobj.guid, gobj.name
+		FROM nodes gobj
+		JOIN edges e ON e.source = gobj.id
+		JOIN nodes comp ON e.target = comp.id
+		WHERE comp.type = 'component' 
+		  AND COALESCE(comp.sub_type, comp.type) = ?
+		  AND e.relationship = 'HAS_COMPONENT'
+		  AND gobj.type = 'gameobject'
+	`, componentType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []Node
+	for rows.Next() {
+		var n Node
+		if err := rows.Scan(&n.ID, &n.Type, &n.SubType, &n.GUID, &n.Name); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, n)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+// ---------- Edge query functions ----------
+
 func GetEdgesBySource(dbPath, sourceID string) ([]Edge, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -404,7 +472,6 @@ func GetEdgesBySource(dbPath, sourceID string) ([]Edge, error) {
 	return edges, nil
 }
 
-// GetEdgesByTarget returns all edges where the given node is the target.
 func GetEdgesByTarget(dbPath, targetID string) ([]Edge, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -436,7 +503,6 @@ func GetEdgesByTarget(dbPath, targetID string) ([]Edge, error) {
 	return edges, nil
 }
 
-// GetEdgesByRelationship returns all edges with a specific relationship.
 func GetEdgesByRelationship(dbPath, relationship string) ([]Edge, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {

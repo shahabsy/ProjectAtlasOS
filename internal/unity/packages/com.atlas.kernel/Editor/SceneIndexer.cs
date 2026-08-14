@@ -198,7 +198,7 @@ namespace Atlas.Kernel.Editor
             public string parent_id;
 
             // ─── Script Resolution ──────────────────────────────────────────
-            public string script_guid;       // MUST be snake_case to match JSON
+            public string script_guid;
             public string class_name;
             public string namespace_name;
 
@@ -312,8 +312,10 @@ namespace Atlas.Kernel.Editor
                     var script = MonoScript.FromMonoBehaviour(mono);
                     if (script != null)
                     {
+                        // Try to get the script asset GUID
                         string scriptPath = AssetDatabase.GetAssetPath(script);
                         string scriptGuid = AssetDatabase.AssetPathToGUID(scriptPath);
+                        
                         if (!string.IsNullOrEmpty(scriptGuid))
                         {
                             compInfo.script_guid = scriptGuid;
@@ -323,7 +325,7 @@ namespace Atlas.Kernel.Editor
                         }
                         else
                         {
-                            // Fallback: use class name as synthetic GUID
+                            // Fallback: use class name as synthetic GUID if no asset path
                             compInfo.script_guid = $"script_{script.GetClass().Name}";
                             compInfo.class_name = script.GetClass().Name;
                             compInfo.namespace_name = script.GetClass().Namespace ?? "";
@@ -332,7 +334,12 @@ namespace Atlas.Kernel.Editor
                     }
                     else
                     {
+                        // No MonoScript attached (shouldn't happen for MonoBehaviour)
                         Debug.LogWarning($"[Atlas] MonoScript is null for component {comp.GetType().Name} on {go.name}");
+                        // Still set a synthetic script_guid to avoid foreign key errors
+                        compInfo.script_guid = $"script_{comp.GetType().Name}";
+                        compInfo.class_name = comp.GetType().Name;
+                        compInfo.namespace_name = "";
                     }
 
                     // ─── Serialized Fields ──────────────────────────────────

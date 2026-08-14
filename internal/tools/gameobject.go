@@ -127,3 +127,33 @@ func (t *GameObjectTools) GetGameObjectHierarchy(gameObjectID string) (GetGameOb
 		Warnings:   warnings,
 	}, nil
 }
+
+// FindGameObjectsWithComponentMeta returns metadata for AI function-calling.
+func (t *GameObjectTools) FindGameObjectsWithComponentMeta() ToolMetadata {
+	return ToolMetadata{
+		Name:        "find_gameobjects_with_component",
+		Description: "Finds all GameObjects that have a component of a specific Unity type (e.g., 'Rigidbody', 'MeshRenderer').",
+		Parameters: []Parameter{
+			{Name: "component_type", Type: "string", Description: "The Unity component class name (e.g., 'Rigidbody')", Required: true},
+		},
+	}
+}
+
+type FindGameObjectsWithComponentRequest struct {
+	ComponentType string `json:"component_type"`
+}
+
+type FindGameObjectsWithComponentResponse struct {
+	GameObjects []*models.GameObject `json:"game_objects"`
+}
+
+func (t *GameObjectTools) FindGameObjectsWithComponent(req FindGameObjectsWithComponentRequest) (FindGameObjectsWithComponentResponse, error) {
+	if req.ComponentType == "" {
+		return FindGameObjectsWithComponentResponse{}, fmt.Errorf("find_gameobjects_with_component: component_type is required")
+	}
+	gobjs, err := t.ctx.Query.GetGameObjectsWithComponent(req.ComponentType)
+	if err != nil {
+		return FindGameObjectsWithComponentResponse{}, err
+	}
+	return FindGameObjectsWithComponentResponse{GameObjects: gobjs}, nil
+}

@@ -68,3 +68,37 @@ func (e *Engine) GetFieldsByComponent(compID string) ([]*models.SerializedField,
 	// For now, we'll return an empty slice.
 	return []*models.SerializedField{}, nil
 }
+
+// GetComponentsByType returns all components of a specific Unity type (e.g., "Rigidbody").
+func (e *Engine) GetComponentsByType(componentType string) ([]*models.Component, error) {
+	nodes, err := db.GetComponentsByType(e.dbPath, componentType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get components by type %s: %w", componentType, err)
+	}
+	var comps []*models.Component
+	for _, n := range nodes {
+		comps = append(comps, &models.Component{
+			ID:       n.ID,
+			Category: n.Type,    // "component"
+			Type:     n.SubType, // "Transform", etc.
+			// Other fields can be filled if needed.
+		})
+	}
+	return comps, nil
+}
+
+// GetGameObjectsWithComponent returns all GameObjects that have a component of the given type.
+func (e *Engine) GetGameObjectsWithComponent(componentType string) ([]*models.GameObject, error) {
+	nodes, err := db.GetGameObjectsWithComponentType(e.dbPath, componentType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get GameObjects with component type %s: %w", componentType, err)
+	}
+	var gobjs []*models.GameObject
+	for _, n := range nodes {
+		gobjs = append(gobjs, &models.GameObject{
+			ID:   n.ID,
+			Name: n.Name,
+		})
+	}
+	return gobjs, nil
+}

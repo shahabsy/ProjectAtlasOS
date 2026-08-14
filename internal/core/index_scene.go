@@ -1,6 +1,7 @@
 package core
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -44,7 +45,7 @@ type AssetReferenceData struct {
 	Name string `json:"name"`
 }
 
-// findUnityProject is defined in init.go – do not redeclare here.
+// findUnityProject is already defined in init.go – we do NOT redeclare it here.
 
 // IndexFullScene indexes a Unity scene from its JSON representation.
 func IndexFullScene(jsonData []byte) error {
@@ -64,53 +65,69 @@ func IndexFullScene(jsonData []byte) error {
 		return fmt.Errorf("scene GUID is too short: %s", scene.Guid)
 	}
 
+	// Use the project root finder from init.go
 	projectRoot, err := findUnityProject()
 	if err != nil {
 		return err
 	}
 	dbPath := db.GetDBPath(projectRoot)
 
+	// Open connection with 5‑second busy timeout
 	conn, err := db.OpenWithBusyTimeout(dbPath, 5000)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
 	defer conn.Close()
 
+	// Create the database schema before running migrations
 	if err := db.CreateDB(dbPath); err != nil {
 		return fmt.Errorf("failed to create database schema: %w", err)
 	}
+
+	// Ensure schema is up‑to‑date
 	if err := db.RunMigrations(dbPath); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
+	// Begin transaction
 	tx, err := db.Begin(conn)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer db.Rollback(tx)
 
-	// Scene node (using first 8 chars of GUID – it's short and unique)
+	// Insert Scene Node using transaction
 	sceneNodeId := "scene_" + scene.Guid[:8]
-	if err := db.InsertNodeTx(tx, sceneNodeId, "scene", scene.Guid, "", scene.Name, ""); err != nil {
+	if err := db.InsertNodeTx(tx, sceneNodeId, "scene", "scene", scene.Guid, "", scene.Name, ""); err != nil {
 		return fmt.Errorf("failed to insert scene node: %w", err)
 	}
 
+	// (Optional maps – used for debugging or later)
 	scriptsMap := make(map[string]bool)
 	prefabsMap := make(map[string]bool)
 	assetsMap := make(map[string]bool)
 
+	// Helper to check node existence
+	nodeExists := func(tx *sql.Tx, id string) (bool, error) {
+		var exists bool
+		err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM nodes WHERE id = ?)", id).Scan(&exists)
+		return exists, err
+	}
+
 	// Process GameObjects
 	for idx, gobj := range scene.GameObjects {
-		// Use the full GlobalId as the node ID – guaranteed unique
+		// Use full GlobalId as node ID for GameObject
 		gobNodeId := gobj.GlobalId
 		if gobNodeId == "" {
 			gobNodeId = fmt.Sprintf("gobj_fallback_%d", idx)
 			fmt.Printf("[Atlas WARN] No GlobalId for GameObject '%s', using fallback.\n", gobj.Name)
 		}
 
-		if err := db.InsertNodeTx(tx, gobNodeId, "gameobject", "", gobj.GlobalId, gobj.Name, ""); err != nil {
+		// Insert GameObject node
+		if err := db.InsertNodeTx(tx, gobNodeId, "gameobject", "", "", gobj.GlobalId, gobj.Name, ""); err != nil {
 			return fmt.Errorf("failed to insert GameObject '%s': %w", gobj.Name, err)
 		}
+		// Edge: scene → GameObject
 		if err := db.InsertEdgeTx(tx, sceneNodeId, gobNodeId, "CONTAINS", ""); err != nil {
 			return fmt.Errorf("failed to link scene to GameObject: %w", err)
 		}
@@ -121,8 +138,8 @@ func IndexFullScene(jsonData []byte) error {
 		}
 		if gobj.PrefabGuid != "" {
 			prefabsMap[gobj.PrefabGuid] = true
-			prefabNodeId := "prefab_" + gobj.PrefabGuid // full GUID
-			if err := db.InsertNodeTx(tx, prefabNodeId, "prefab", gobj.PrefabGuid, "", gobj.Name, ""); err != nil {
+			prefabNodeId := "prefab_" + gobj.PrefabGuid
+			if err := db.InsertNodeTx(tx, prefabNodeId, "prefab", "prefab", gobj.PrefabGuid, "", gobj.Name, ""); err != nil {
 				return fmt.Errorf("failed to insert prefab node: %w", err)
 			}
 			if err := db.InsertEdgeTx(tx, gobNodeId, prefabNodeId, "INSTANCE_OF", ""); err != nil {
@@ -136,9 +153,9 @@ func IndexFullScene(jsonData []byte) error {
 				fmt.Printf("[Atlas WARN] Component GlobalId too short: '%s', skipping\n", comp.GlobalId)
 				continue
 			}
-			// Use the full GlobalId as the component ID
+			// Use full GlobalId as node ID for Component
 			compNodeId := comp.GlobalId
-			if err := db.InsertNodeTx(tx, compNodeId, "component", "", comp.GlobalId, comp.Type, ""); err != nil {
+			if err := db.InsertNodeTx(tx, compNodeId, "component", comp.Type, "", comp.GlobalId, comp.Type, ""); err != nil {
 				return fmt.Errorf("failed to insert component '%s': %w", comp.Type, err)
 			}
 			if err := db.InsertEdgeTx(tx, gobNodeId, compNodeId, "HAS_COMPONENT", ""); err != nil {
@@ -147,13 +164,35 @@ func IndexFullScene(jsonData []byte) error {
 
 			// Script Edge
 			if comp.ScriptGuid != "" {
-				scriptsMap[comp.ScriptGuid] = true
 				scriptNodeId := "script_" + comp.ScriptGuid
-				if err := db.InsertNodeTx(tx, scriptNodeId, "script", comp.ScriptGuid, "", comp.ClassName, ""); err != nil {
-					return fmt.Errorf("failed to insert script node: %w", err)
+				scriptsMap[comp.ScriptGuid] = true
+
+				// Insert script node
+				if err := db.InsertNodeTx(tx, scriptNodeId, "script", "script", comp.ScriptGuid, "", comp.ClassName, ""); err != nil {
+					return fmt.Errorf("failed to insert script node (id: %s, guid: %s): %w", scriptNodeId, comp.ScriptGuid, err)
 				}
+
+				// Verify the script node exists before creating edge
+				exists, err := nodeExists(tx, scriptNodeId)
+				if err != nil {
+					return fmt.Errorf("failed to verify script node existence: %w", err)
+				}
+				if !exists {
+					return fmt.Errorf("script node '%s' (guid: %s) does not exist after insertion", scriptNodeId, comp.ScriptGuid)
+				}
+
+				// Verify component node exists (should, but double‑check)
+				compExists, err := nodeExists(tx, compNodeId)
+				if err != nil {
+					return fmt.Errorf("failed to verify component node existence: %w", err)
+				}
+				if !compExists {
+					return fmt.Errorf("component node '%s' does not exist before creating USES_SCRIPT edge", compNodeId)
+				}
+
+				fmt.Printf("[Atlas DEBUG] Creating USES_SCRIPT edge from %s to %s\n", compNodeId, scriptNodeId)
 				if err := db.InsertEdgeTx(tx, compNodeId, scriptNodeId, "USES_SCRIPT", ""); err != nil {
-					return fmt.Errorf("failed to link component to script: %w", err)
+					return fmt.Errorf("failed to link component to script (component: %s, script: %s): %w", compNodeId, scriptNodeId, err)
 				}
 				fmt.Printf("[Atlas DEBUG] Added USES_SCRIPT edge from %s to %s\n", compNodeId, scriptNodeId)
 			}
@@ -161,23 +200,25 @@ func IndexFullScene(jsonData []byte) error {
 			// Serialized Fields
 			for _, field := range comp.SerializedFields {
 				fieldNodeId := compNodeId + "_field_" + field.Name
-				if err := db.InsertNodeTx(tx, fieldNodeId, "serialized_field", "", "", field.Name, ""); err != nil {
+				if err := db.InsertNodeTx(tx, fieldNodeId, "serialized_field", "", "", "", field.Name, ""); err != nil {
 					return fmt.Errorf("failed to insert serialized field node: %w", err)
 				}
 				if err := db.InsertEdgeTx(tx, compNodeId, fieldNodeId, "HAS_FIELD", ""); err != nil {
 					return fmt.Errorf("failed to link serialized field to component: %w", err)
 				}
 				if field.ReferenceId != "" {
-					// Insert asset node with prefix "asset_"
-					assetNodeId := "asset_" + field.ReferenceId
-					// Use INSERT OR IGNORE to avoid duplicate conflicts (if the asset already exists)
-					// But we want to keep the data consistent, so we use INSERT OR REPLACE.
-					if err := db.InsertNodeTx(tx, assetNodeId, "asset", field.ReferenceId, "", field.Name, ""); err != nil {
-						return fmt.Errorf("failed to insert asset node for reference '%s': %w", field.ReferenceId, err)
+					if len(field.ReferenceId) < 8 {
+						fmt.Printf("[Atlas WARN] ReferenceId too short: '%s', skipping asset edge\n", field.ReferenceId)
+						continue
 					}
 					assetsMap[field.ReferenceId] = true
-					if err := db.InsertEdgeTx(tx, fieldNodeId, assetNodeId, "REFERENCES", ""); err != nil {
-						return fmt.Errorf("failed to link serialized field to asset (target: %s, ref: %s): %w", assetNodeId, field.ReferenceId, err)
+					targetNodeId := "asset_" + field.ReferenceId
+					// Insert asset node (may already exist)
+					if err := db.InsertNodeTx(tx, targetNodeId, "asset", "asset", field.ReferenceId, "", field.Name, ""); err != nil {
+						return fmt.Errorf("failed to insert asset node for reference: %w", err)
+					}
+					if err := db.InsertEdgeTx(tx, fieldNodeId, targetNodeId, "REFERENCES", ""); err != nil {
+						return fmt.Errorf("failed to link serialized field to asset: %w", err)
 					}
 				}
 			}
@@ -190,7 +231,7 @@ func IndexFullScene(jsonData []byte) error {
 				}
 				assetsMap[assetRef.Guid] = true
 				assetNodeId := "asset_" + assetRef.Guid
-				if err := db.InsertNodeTx(tx, assetNodeId, assetRef.Type, assetRef.Guid, "", assetRef.Name, ""); err != nil {
+				if err := db.InsertNodeTx(tx, assetNodeId, "asset", assetRef.Type, assetRef.Guid, "", assetRef.Name, ""); err != nil {
 					return fmt.Errorf("failed to insert asset node: %w", err)
 				}
 				rel := "USES_" + assetRef.Type
@@ -201,6 +242,7 @@ func IndexFullScene(jsonData []byte) error {
 		}
 	}
 
+	// Commit
 	if err := db.CommitTx(tx); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}

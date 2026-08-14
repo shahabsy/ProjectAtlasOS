@@ -3,6 +3,11 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
+)
+
+const (
+	SchemaVersion = 3
 )
 
 // GetSchemaVersion returns the current user_version from PRAGMA.
@@ -28,36 +33,39 @@ func SetSchemaVersion(dbPath string, version int) error {
 	return err
 }
 
-// RunMigrations ensures the database is at the latest version.
+// RunMigrations ensures the database schema is at the latest version.
 func RunMigrations(dbPath string) error {
 	current := GetSchemaVersion(dbPath)
-	if current < 2 {
-		// Migration to version 2: add new columns and tables
-		db, err := sql.Open("sqlite", dbPath)
-		if err != nil {
-			return err
-		}
-		defer db.Close()
+	if current >= SchemaVersion {
+		return nil
+	}
 
-		// Add columns to nodes if not exist (idempotent)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to open database for migration: %w", err)
+	}
+	defer db.Close()
+
+	// Migration to version 2 (if not already applied)
+	if current < 2 {
+		// Add columns if they don't exist (idempotent)
 		_, err = db.Exec(`ALTER TABLE nodes ADD COLUMN global_id TEXT`)
-		if err != nil {
-			// ignore if already exists
+		if err != nil && !isDuplicateColumnError(err) {
+			return fmt.Errorf("failed to add global_id column: %w", err)
 		}
 		_, err = db.Exec(`ALTER TABLE nodes ADD COLUMN path TEXT`)
-		if err != nil {
-			// ignore
+		if err != nil && !isDuplicateColumnError(err) {
+			return fmt.Errorf("failed to add path column: %w", err)
 		}
 		_, err = db.Exec(`ALTER TABLE nodes ADD COLUMN metadata TEXT`)
-		if err != nil {
-			// ignore
+		if err != nil && !isDuplicateColumnError(err) {
+			return fmt.Errorf("failed to add metadata column: %w", err)
 		}
 		_, err = db.Exec(`ALTER TABLE edges ADD COLUMN metadata TEXT`)
-		if err != nil {
-			// ignore
+		if err != nil && !isDuplicateColumnError(err) {
+			return fmt.Errorf("failed to add edges.metadata column: %w", err)
 		}
-
-		// New indexes
+		// Indexes
 		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_global_id ON nodes(global_id)`)
 		if err != nil {
 			return err
@@ -66,11 +74,43 @@ func RunMigrations(dbPath string) error {
 		if err != nil {
 			return err
 		}
+		current = 2
+	}
 
-		// Set version to 2
-		if err := SetSchemaVersion(dbPath, 2); err != nil {
+	// Migration to version 3: add sub_type and composite indexes
+	if current < 3 {
+		_, err = db.Exec(`ALTER TABLE nodes ADD COLUMN sub_type TEXT`)
+		if err != nil && !isDuplicateColumnError(err) {
+			return fmt.Errorf("failed to add sub_type column: %w", err)
+		}
+		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_sub_type ON nodes(sub_type)`)
+		if err != nil {
 			return err
 		}
+		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_source_rel ON edges(source, relationship)`)
+		if err != nil {
+			return err
+		}
+		_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_edges_target_rel ON edges(target, relationship)`)
+		if err != nil {
+			return err
+		}
+		current = 3
+	}
+
+	// Set version
+	if err := SetSchemaVersion(dbPath, current); err != nil {
+		return fmt.Errorf("failed to set schema version: %w", err)
 	}
 	return nil
+}
+
+// isDuplicateColumnError checks if the error indicates a duplicate column.
+func isDuplicateColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "duplicate column name") ||
+		strings.Contains(msg, "already exists")
 }

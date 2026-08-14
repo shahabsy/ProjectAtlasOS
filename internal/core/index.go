@@ -109,7 +109,7 @@ func IndexNode(typ, guid, name string) error {
 		id = node.ID
 	}
 
-	if err := db.InsertNode(dbPath, id, typ, guid, "", name, ""); err != nil {
+	if err := db.InsertNode(dbPath, id, typ, guid, "", name, "", ""); err != nil {
 		return fmt.Errorf("insert failed: %w", err)
 	}
 	fmt.Printf("✅ Indexed %s '%s' (guid: %s)\n", typ, name, guid)

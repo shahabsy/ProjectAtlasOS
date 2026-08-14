@@ -73,3 +73,33 @@ func (t *ComponentTools) GetFields(req GetFieldsRequest) (GetFieldsResponse, err
 	// TODO: Implement when query.GetFieldsByComponent is available.
 	return GetFieldsResponse{Fields: []*models.SerializedField{}}, nil
 }
+
+// FindComponentsByTypeMeta returns metadata for AI function-calling.
+func (t *ComponentTools) FindComponentsByTypeMeta() ToolMetadata {
+	return ToolMetadata{
+		Name:        "find_components_by_type",
+		Description: "Finds all components of a specific Unity type (e.g., 'Rigidbody', 'MeshRenderer', 'AudioSource').",
+		Parameters: []Parameter{
+			{Name: "type", Type: "string", Description: "The Unity component class name (e.g., 'Transform')", Required: true},
+		},
+	}
+}
+
+type FindComponentsByTypeRequest struct {
+	Type string `json:"type"`
+}
+
+type FindComponentsByTypeResponse struct {
+	Components []*models.Component `json:"components"`
+}
+
+func (t *ComponentTools) FindComponentsByType(req FindComponentsByTypeRequest) (FindComponentsByTypeResponse, error) {
+	if req.Type == "" {
+		return FindComponentsByTypeResponse{}, fmt.Errorf("find_components_by_type: type is required")
+	}
+	comps, err := t.ctx.Query.GetComponentsByType(req.Type)
+	if err != nil {
+		return FindComponentsByTypeResponse{}, err
+	}
+	return FindComponentsByTypeResponse{Components: comps}, nil
+}
