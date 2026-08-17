@@ -12,11 +12,12 @@ type Scene struct {
 
 // SceneStatistics holds aggregated counts for a scene.
 type SceneStatistics struct {
-	GameObjectCount int `json:"game_object_count"`
-	ComponentCount  int `json:"component_count"`
-	ScriptCount     int `json:"script_count"`
-	PrefabCount     int `json:"prefab_count"`
-	AssetCount      int `json:"asset_count"`
-	FieldCount      int `json:"field_count"`
+	GameObjectCount int              `json:"game_object_count"`
+	ComponentCount  int              `json:"component_count"`
+	ScriptCount     int              `json:"script_count"`
+	PrefabCount     int              `json:"prefab_count"`
+	AssetCount      int              `json:"asset_count"`
+	FieldCount      int              `json:"field_count"`
+	Availability    DataAvailability `json:"availability"`
 	// Later we can Materials, Shaders, Textures etc. if need be
 }

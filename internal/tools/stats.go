@@ -68,3 +68,50 @@ func (t *StatsTools) SceneStats(req SceneStatsRequest) (SceneStatsResponse, erro
 	}
 	return SceneStatsResponse{Statistics: stats}, nil
 }
+
+type GetGraphCapabilitiesRequest struct{}
+
+// GetGraphCapabilitiesResponse is the output for GetGraphCapabilities.
+type GetGraphCapabilitiesResponse struct {
+	ProjectOverview struct {
+		Scenes      int `json:"scenes"`
+		GameObjects int `json:"game_objects"`
+		Components  int `json:"components"`
+		Scripts     int `json:"scripts"`
+		Assets      int `json:"assets"`
+	} `json:"project_overview"`
+	Capabilities models.DataAvailability `json:"capabilities"`
+}
+
+// GetGraphCapabilities returns a summary of the project and available data.
+func (t *StatsTools) GetGraphCapabilities() (GetGraphCapabilitiesResponse, error) {
+	summary, err := t.ctx.Statistics.ProjectSummary()
+	if err != nil {
+		return GetGraphCapabilitiesResponse{}, err
+	}
+	caps := models.DataAvailability{
+		Scenes:           true,
+		GameObjects:      true,
+		Components:       true,
+		Scripts:          true,
+		SerializedFields: false,
+		AssetReferences:  false,
+		Prefabs:          false,
+	}
+	return GetGraphCapabilitiesResponse{
+		ProjectOverview: struct {
+			Scenes      int `json:"scenes"`
+			GameObjects int `json:"game_objects"`
+			Components  int `json:"components"`
+			Scripts     int `json:"scripts"`
+			Assets      int `json:"assets"`
+		}{
+			Scenes:      summary.TotalScenes,
+			GameObjects: summary.TotalGameObjects,
+			Components:  summary.TotalComponents,
+			Scripts:     summary.UniqueScripts,
+			Assets:      summary.TotalAssets,
+		},
+		Capabilities: caps,
+	}, nil
+}

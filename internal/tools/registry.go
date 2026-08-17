@@ -194,6 +194,13 @@ func (r *ToolRegistry) AllCallables() map[string]Callable {
 		}
 		return json.Marshal(resp)
 	}
+	reg["get_graph_capabilities"] = func(args json.RawMessage) ([]byte, error) {
+		resp, err := r.Stats.GetGraphCapabilities()
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(resp)
+	}
 
 	return reg
 }
