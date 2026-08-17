@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// statsCmd is the root of "stats" subcommands.
 var statsCmd = &cobra.Command{
 	Use:   "stats",
 	Short: "Show statistics",
@@ -17,14 +16,18 @@ var projectStatsCmd = &cobra.Command{
 	Use:   "project",
 	Short: "Show project statistics",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		resp, err := registry.Stats.ProjectStats(tools.ProjectStatsRequest{})
-		if err != nil {
-			return err
+		res := registry.Stats.ProjectStats()
+		if !res.Success {
+			return fmt.Errorf("failed to get project stats: %s", res.Error.Message)
+		}
+		statsResp, ok := res.Data.(tools.ProjectStatsResponse)
+		if !ok {
+			return fmt.Errorf("unexpected response type")
 		}
 		if jsonOutput {
-			printJSON(resp)
+			printJSON(statsResp)
 		} else {
-			s := resp.Summary
+			s := statsResp.Summary
 			fmt.Println("Project Statistics:")
 			fmt.Printf("  Scenes:             %d\n", s.TotalScenes)
 			fmt.Printf("  GameObjects:        %d\n", s.TotalGameObjects)
@@ -44,14 +47,18 @@ var sceneStatsCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sceneID := args[0]
-		resp, err := registry.Stats.SceneStats(tools.SceneStatsRequest{SceneID: sceneID})
-		if err != nil {
-			return err
+		res := registry.Stats.SceneStats(sceneID)
+		if !res.Success {
+			return fmt.Errorf("failed to get scene stats: %s", res.Error.Message)
+		}
+		statsResp, ok := res.Data.(tools.SceneStatsResponse)
+		if !ok {
+			return fmt.Errorf("unexpected response type")
 		}
 		if jsonOutput {
-			printJSON(resp)
+			printJSON(statsResp)
 		} else {
-			s := resp.Statistics
+			s := statsResp.Statistics
 			fmt.Printf("Scene Statistics (ID: %s):\n", sceneID)
 			fmt.Printf("  GameObjects:  %d\n", s.GameObjectCount)
 			fmt.Printf("  Components:   %d\n", s.ComponentCount)
@@ -67,4 +74,5 @@ var sceneStatsCmd = &cobra.Command{
 func init() {
 	statsCmd.AddCommand(projectStatsCmd)
 	statsCmd.AddCommand(sceneStatsCmd)
+	rootCmd.AddCommand(statsCmd) // <-- ADD THIS LINE
 }

@@ -21,7 +21,19 @@ func BuildSystemContext(registry *tools.ToolRegistry) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Unmarshal result.
+	// Unmarshal result (expecting tools.Result).
+	var toolResult tools.Result
+	if err := json.Unmarshal(resultBytes, &toolResult); err != nil {
+		return "", fmt.Errorf("failed to unmarshal tool result: %w", err)
+	}
+	if !toolResult.Success {
+		return "", fmt.Errorf("get_graph_capabilities failed: %s", toolResult.Error.Message)
+	}
+	// Extract data.
+	dataBytes, err := json.Marshal(toolResult.Data)
+	if err != nil {
+		return "", err
+	}
 	var result struct {
 		ProjectOverview struct {
 			Scenes      int `json:"scenes"`
@@ -40,7 +52,7 @@ func BuildSystemContext(registry *tools.ToolRegistry) (string, error) {
 			Prefabs          bool `json:"prefabs"`
 		} `json:"capabilities"`
 	}
-	if err := json.Unmarshal(resultBytes, &result); err != nil {
+	if err := json.Unmarshal(dataBytes, &result); err != nil {
 		return "", err
 	}
 

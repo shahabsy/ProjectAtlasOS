@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// listCmd is the root of "list" subcommands.
 var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List resources (scenes, assets, etc.)",
@@ -17,15 +16,19 @@ var listScenesCmd = &cobra.Command{
 	Use:   "scenes",
 	Short: "List all scenes",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		resp, err := registry.Scene.ListScenes()
-		if err != nil {
-			return err
+		res := registry.Scene.ListScenes()
+		if !res.Success {
+			return fmt.Errorf("failed to list scenes: %s", res.Error.Message)
+		}
+		listResp, ok := res.Data.(tools.ListScenesResponse)
+		if !ok {
+			return fmt.Errorf("unexpected response type")
 		}
 		if jsonOutput {
-			printJSON(resp)
+			printJSON(listResp)
 		} else {
-			fmt.Printf("Scenes (%d):\n", len(resp.Scenes))
-			for _, s := range resp.Scenes {
+			fmt.Printf("Scenes (%d):\n", len(listResp.Scenes))
+			for _, s := range listResp.Scenes {
 				fmt.Printf("  - %s (ID: %s, GUID: %s)\n", s.Name, s.ID, s.GUID)
 			}
 		}
@@ -37,15 +40,19 @@ var listAssetsCmd = &cobra.Command{
 	Use:   "assets",
 	Short: "List all assets",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		resp, err := registry.Asset.ListAssets(tools.ListAssetsRequest{})
-		if err != nil {
-			return err
+		res := registry.Asset.ListAssets()
+		if !res.Success {
+			return fmt.Errorf("failed to list assets: %s", res.Error.Message)
+		}
+		listResp, ok := res.Data.(tools.ListAssetsResponse)
+		if !ok {
+			return fmt.Errorf("unexpected response type")
 		}
 		if jsonOutput {
-			printJSON(resp)
+			printJSON(listResp)
 		} else {
-			fmt.Printf("Assets (%d):\n", len(resp.Assets))
-			for _, a := range resp.Assets {
+			fmt.Printf("Assets (%d):\n", len(listResp.Assets))
+			for _, a := range listResp.Assets {
 				fmt.Printf("  - %s (ID: %s, Type: %s)\n", a.Name, a.ID, a.Type)
 			}
 		}
@@ -56,4 +63,5 @@ var listAssetsCmd = &cobra.Command{
 func init() {
 	listCmd.AddCommand(listScenesCmd)
 	listCmd.AddCommand(listAssetsCmd)
+	rootCmd.AddCommand(listCmd) // <-- ADD THIS LINE
 }

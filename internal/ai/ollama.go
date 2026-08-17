@@ -80,7 +80,7 @@ func NewOllamaClient(baseURL, model string) *OllamaClient {
 		baseURL = "http://localhost:11434"
 	}
 	if model == "" {
-		model = "llama3.2"
+		model = "qwen2.5-coder:32b"
 	}
 	return &OllamaClient{
 		BaseURL: baseURL,
@@ -107,7 +107,10 @@ func (c *OllamaClient) Chat(messages []Message, tools []Tool) (*Message, error) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		// Read the body to get the actual error message.
+		var errBody bytes.Buffer
+		_, _ = errBody.ReadFrom(resp.Body)
+		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, errBody.String())
 	}
 	var chatResp ChatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {

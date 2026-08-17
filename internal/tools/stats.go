@@ -6,72 +6,46 @@ import (
 	"github.com/shahabsy/ProjectAtlasOS/internal/models"
 )
 
-// StatsTools provides tools for statistics.
-type StatsTools struct {
-	ctx *Context
-}
+type StatsTools struct{ ctx *Context }
 
-// NewStatsTools creates a new StatsTools instance.
-func NewStatsTools(ctx *Context) *StatsTools {
-	return &StatsTools{ctx: ctx}
-}
+func NewStatsTools(ctx *Context) *StatsTools { return &StatsTools{ctx: ctx} }
 
-// Meta implements ToolMetaProvider.
-func (t *StatsTools) Meta() ToolMetadata {
-	return ToolMetadata{
-		Name:        "project_stats",
-		Description: "Returns aggregated project statistics (scenes, GameObjects, components, scripts, assets).",
-		Parameters:  []Parameter{},
+func (t *StatsTools) Contract() Contract {
+	return Contract{
+		Name:        "stats_tools",
+		Description: "Tools for project statistics.",
+		InputSchema: Schema{Type: "object", Properties: map[string]Property{}, Required: []string{}},
+		ReadOnly:    true,
 	}
 }
 
-// ---------- ProjectStats ----------
-
-// ProjectStatsRequest is the input for ProjectStats.
-type ProjectStatsRequest struct{}
-
-// ProjectStatsResponse is the output for ProjectStats.
 type ProjectStatsResponse struct {
 	Summary *models.ProjectSummary `json:"summary"`
 }
 
-// ProjectStats returns aggregated project statistics.
-func (t *StatsTools) ProjectStats(req ProjectStatsRequest) (ProjectStatsResponse, error) {
+func (t *StatsTools) ProjectStats() Result {
 	summary, err := t.ctx.Statistics.ProjectSummary()
 	if err != nil {
-		return ProjectStatsResponse{}, fmt.Errorf("project_stats: %w", err)
+		return NewErrorResult("STATS_FAILED", fmt.Sprintf("project_stats: %v", err))
 	}
-	return ProjectStatsResponse{Summary: summary}, nil
+	return NewSuccessResult(ProjectStatsResponse{Summary: summary})
 }
 
-// ---------- SceneStats ----------
-
-// SceneStatsRequest is the input for SceneStats.
-type SceneStatsRequest struct {
-	SceneID string `json:"scene_id"`
-}
-
-// SceneStatsResponse is the output for SceneStats.
 type SceneStatsResponse struct {
 	Statistics *models.SceneStatistics `json:"statistics"`
 }
 
-// SceneStats returns statistics for a specific scene.
-func (t *StatsTools) SceneStats(req SceneStatsRequest) (SceneStatsResponse, error) {
-	if req.SceneID == "" {
-		return SceneStatsResponse{}, fmt.Errorf("scene_stats: scene_id is required")
+func (t *StatsTools) SceneStats(sceneID string) Result {
+	if sceneID == "" {
+		return NewErrorResult("MISSING_ARGUMENT", "scene_id is required")
 	}
-
-	stats, err := t.ctx.Statistics.SceneSummary(req.SceneID)
+	stats, err := t.ctx.Statistics.SceneSummary(sceneID)
 	if err != nil {
-		return SceneStatsResponse{}, fmt.Errorf("scene_stats: %w", err)
+		return NewErrorResult("STATS_FAILED", fmt.Sprintf("scene_stats: %v", err))
 	}
-	return SceneStatsResponse{Statistics: stats}, nil
+	return NewSuccessResult(SceneStatsResponse{Statistics: stats})
 }
 
-type GetGraphCapabilitiesRequest struct{}
-
-// GetGraphCapabilitiesResponse is the output for GetGraphCapabilities.
 type GetGraphCapabilitiesResponse struct {
 	ProjectOverview struct {
 		Scenes      int `json:"scenes"`
@@ -83,11 +57,10 @@ type GetGraphCapabilitiesResponse struct {
 	Capabilities models.DataAvailability `json:"capabilities"`
 }
 
-// GetGraphCapabilities returns a summary of the project and available data.
-func (t *StatsTools) GetGraphCapabilities() (GetGraphCapabilitiesResponse, error) {
+func (t *StatsTools) GetGraphCapabilities() Result {
 	summary, err := t.ctx.Statistics.ProjectSummary()
 	if err != nil {
-		return GetGraphCapabilitiesResponse{}, err
+		return NewErrorResult("STATS_FAILED", fmt.Sprintf("get_graph_capabilities: %v", err))
 	}
 	caps := models.DataAvailability{
 		Scenes:           true,
@@ -98,7 +71,7 @@ func (t *StatsTools) GetGraphCapabilities() (GetGraphCapabilitiesResponse, error
 		AssetReferences:  false,
 		Prefabs:          false,
 	}
-	return GetGraphCapabilitiesResponse{
+	resp := GetGraphCapabilitiesResponse{
 		ProjectOverview: struct {
 			Scenes      int `json:"scenes"`
 			GameObjects int `json:"game_objects"`
@@ -113,5 +86,6 @@ func (t *StatsTools) GetGraphCapabilities() (GetGraphCapabilitiesResponse, error
 			Assets:      summary.TotalAssets,
 		},
 		Capabilities: caps,
-	}, nil
+	}
+	return NewSuccessResult(resp)
 }

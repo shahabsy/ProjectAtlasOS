@@ -3,10 +3,10 @@ package commands
 import (
 	"fmt"
 
+	"github.com/shahabsy/ProjectAtlasOS/internal/tools"
 	"github.com/spf13/cobra"
 )
 
-// describeCmd is the root of "describe" subcommands.
 var describeCmd = &cobra.Command{
 	Use:   "describe",
 	Short: "Describe a resource (scene, GameObject, etc.)",
@@ -18,19 +18,23 @@ var describeSceneCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		sceneID := args[0]
-		resp, err := registry.Scene.DescribeScene(sceneID)
-		if err != nil {
-			return err
+		res := registry.Scene.DescribeScene(sceneID)
+		if !res.Success {
+			return fmt.Errorf("failed to describe scene: %s", res.Error.Message)
+		}
+		descResp, ok := res.Data.(tools.DescribeSceneResponse)
+		if !ok {
+			return fmt.Errorf("unexpected response type")
 		}
 		if jsonOutput {
-			printJSON(resp)
+			printJSON(descResp)
 		} else {
-			fmt.Printf("Scene: %s (ID: %s, GUID: %s)\n", resp.Scene.Name, resp.Scene.ID, resp.Scene.GUID)
-			fmt.Printf("  GameObjects: %d\n", resp.Statistics.GameObjectCount)
-			fmt.Printf("  Components:  %d\n", resp.Statistics.ComponentCount)
-			fmt.Printf("  Scripts:     %d\n", resp.Statistics.ScriptCount)
-			if len(resp.Warnings) > 0 {
-				fmt.Printf("  Warnings:    %v\n", resp.Warnings)
+			fmt.Printf("Scene: %s (ID: %s, GUID: %s)\n", descResp.Scene.Name, descResp.Scene.ID, descResp.Scene.GUID)
+			fmt.Printf("  GameObjects: %d\n", descResp.Statistics.GameObjectCount)
+			fmt.Printf("  Components:  %d\n", descResp.Statistics.ComponentCount)
+			fmt.Printf("  Scripts:     %d\n", descResp.Statistics.ScriptCount)
+			if len(descResp.Warnings) > 0 {
+				fmt.Printf("  Warnings:    %v\n", descResp.Warnings)
 			}
 		}
 		return nil
@@ -39,4 +43,5 @@ var describeSceneCmd = &cobra.Command{
 
 func init() {
 	describeCmd.AddCommand(describeSceneCmd)
+	rootCmd.AddCommand(describeCmd) // <-- ADD THIS LINE
 }

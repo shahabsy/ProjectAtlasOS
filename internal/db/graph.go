@@ -533,3 +533,41 @@ func GetEdgesByRelationship(dbPath, relationship string) ([]Edge, error) {
 	}
 	return edges, nil
 }
+
+// GetScriptsByScene returns all script nodes used by GameObjects in a scene.
+func GetScriptsByScene(dbPath, sceneID string) ([]Node, error) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT DISTINCT s.id, s.type, s.sub_type, s.guid, s.name
+		FROM nodes s
+		JOIN edges e_script ON e_script.target = s.id AND e_script.relationship = 'USES_SCRIPT'
+		JOIN nodes comp ON comp.id = e_script.source AND comp.type = 'component'
+		JOIN edges e_comp ON e_comp.target = comp.id AND e_comp.relationship = 'HAS_COMPONENT'
+		JOIN nodes gobj ON gobj.id = e_comp.source AND gobj.type = 'gameobject'
+		JOIN edges e_scene ON e_scene.target = gobj.id AND e_scene.relationship = 'CONTAINS'
+		WHERE e_scene.source = ?
+	`, sceneID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var scripts []Node
+	for rows.Next() {
+		var n Node
+		// Only scan the columns we selected.
+		if err := rows.Scan(&n.ID, &n.Type, &n.SubType, &n.GUID, &n.Name); err != nil {
+			return nil, err
+		}
+		scripts = append(scripts, n)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return scripts, nil
+}

@@ -1,5 +1,6 @@
 // Package tools provides deterministic, typed capabilities for interacting with the Unity knowledge graph.
 // Tools are the foundational layer used by CLI, HTTP API, and AI components.
+// Delete this file - no longer needed
 package tools
 
 // Parameter describes a tool input for AI function-calling.

@@ -21,7 +21,7 @@ func main() {
 	fmt.Println("=== ATLAS STACK TEST ====")
 
 	// ------------------------------------------------------------
-	// 1. QUERY ENGINE TESTS
+	// 1. QUERY ENGINE TESTS (unchanged, these work with (data, error) returns)
 	// ------------------------------------------------------------
 
 	// 1.1 List all scenes
@@ -103,7 +103,6 @@ func main() {
 	}
 
 	// 1.6 Get GameObject by ID (pick a GameObject from the list)
-	// We'll get the first GameObject from the scene.
 	if len(scenes) > 0 {
 		sceneID := scenes[0].ID
 		gobjs, err := q.GetGameObjectsByScene(sceneID)
@@ -283,12 +282,10 @@ func main() {
 	fmt.Println()
 
 	// 1.16 Traversal: WalkParents
-	// Use a GameObject from the scene
 	if len(scenes) > 0 {
 		sceneID := scenes[0].ID
 		gobjs, err := q.GetGameObjectsByScene(sceneID)
 		if err == nil && len(gobjs) > 0 {
-			// pick a child if possible, but we'll just use the first one and see parents
 			gobjID := gobjs[0].ID
 			fmt.Printf("1.16 WalkParents(%q)\n", gobjID)
 			parents, err := q.WalkParents(gobjID)
@@ -307,14 +304,12 @@ func main() {
 	// 1.17 Traversal: WalkChildren
 	if len(scenes) > 0 {
 		sceneID := scenes[0].ID
-		// Use scene ID itself to get children (GameObjects)
 		fmt.Printf("1.17 WalkChildren(%q) (scene)\n", sceneID)
 		children, err := q.WalkChildren(sceneID)
 		if err != nil {
 			log.Fatalf("WalkChildren error: %v", err)
 		}
 		fmt.Printf("  Found %d children (GameObjects) under scene\n", len(children))
-		// Show first 5 child IDs
 		for i, child := range children {
 			if i >= 5 {
 				fmt.Printf("  ... and %d more\n", len(children)-5)
@@ -326,7 +321,6 @@ func main() {
 	}
 
 	// 1.18 Traversal: GetNeighbors
-	// Pick a node (e.g., scene) and get neighbors via CONTAINS relationship
 	if len(scenes) > 0 {
 		sceneID := scenes[0].ID
 		relationship := "CONTAINS"
@@ -355,7 +349,6 @@ func main() {
 			log.Fatalf("WalkDependencies error: %v", err)
 		}
 		fmt.Printf("  Found %d dependencies (nodes that depend on this script)\n", len(deps))
-		// Show some IDs
 		for i, dep := range deps {
 			if i >= 5 {
 				fmt.Printf("  ... and %d more\n", len(deps)-5)
@@ -390,7 +383,7 @@ func main() {
 	}
 
 	// ------------------------------------------------------------
-	// 2. STATISTICS ENGINE TESTS
+	// 2. STATISTICS ENGINE TESTS (unchanged)
 	// ------------------------------------------------------------
 
 	fmt.Println("=== STATISTICS ENGINE TESTS ===")
@@ -418,7 +411,10 @@ func main() {
 
 	fmt.Println("=== ALL TESTS COMPLETED ===")
 
-	// 3. TOOL RUNTIME TESTS
+	// ------------------------------------------------------------
+	// 3. TOOL RUNTIME TESTS (updated to use the current tools.Result API)
+	// ------------------------------------------------------------
+
 	fmt.Println("\n=== TOOL RUNTIME TESTS ===")
 
 	// Reuse the existing engines
@@ -426,18 +422,26 @@ func main() {
 	registry := tools.NewToolRegistry(toolCtx)
 
 	// 3.1 ListScenes
-	scenesResp, err := registry.Scene.ListScenes()
-	if err != nil {
-		log.Fatalf("ListScenes: %v", err)
+	sceneResult := registry.Scene.ListScenes()
+	if !sceneResult.Success {
+		log.Fatalf("ListScenes failed: %s", sceneResult.Error.Message)
+	}
+	scenesResp, ok := sceneResult.Data.(tools.ListScenesResponse)
+	if !ok {
+		log.Fatalf("ListScenes: unexpected response type")
 	}
 	fmt.Printf("3.1 ListScenes: %d scenes\n", len(scenesResp.Scenes))
 
 	// 3.2 DescribeScene
 	if len(scenesResp.Scenes) > 0 {
 		sceneID := scenesResp.Scenes[0].ID
-		describeResp, err := registry.Scene.DescribeScene(sceneID)
-		if err != nil {
-			log.Fatalf("DescribeScene: %v", err)
+		descResult := registry.Scene.DescribeScene(sceneID)
+		if !descResult.Success {
+			log.Fatalf("DescribeScene failed: %s", descResult.Error.Message)
+		}
+		describeResp, ok := descResult.Data.(tools.DescribeSceneResponse)
+		if !ok {
+			log.Fatalf("DescribeScene: unexpected response type")
 		}
 		fmt.Printf("3.2 DescribeScene: %s | GO=%d | Scripts=%d | Warnings=%v\n",
 			describeResp.Scene.Name,
@@ -446,77 +450,94 @@ func main() {
 			describeResp.Warnings)
 	}
 
-	// 3.3 FindGameObjects
+	// 3.3 ListGameObjects (first scene)
 	if len(scenesResp.Scenes) > 0 {
-		findResp, err := registry.GameObject.FindGameObjects(tools.FindGameObjectsRequest{
-			SceneID: scenesResp.Scenes[0].ID,
-			Name:    "Camera",
-		})
-		if err != nil {
-			log.Fatalf("FindGameObjects: %v", err)
+		sceneID := scenesResp.Scenes[0].ID
+		goResult := registry.GameObject.ListGameObjects(sceneID)
+		if !goResult.Success {
+			log.Fatalf("ListGameObjects failed: %s", goResult.Error.Message)
 		}
-		fmt.Printf("3.3 FindGameObjects('Camera'): %d found\n", len(findResp.GameObjects))
+		goList, ok := goResult.Data.(tools.ListGameObjectsResponse)
+		if !ok {
+			log.Fatalf("ListGameObjects: unexpected response type")
+		}
+		fmt.Printf("3.3 ListGameObjects: %d GameObjects in scene\n", len(goList.GameObjects))
+	}
 
-		// 3.4 GetHierarchy
-		if len(findResp.GameObjects) > 0 {
-			hierResp, err := registry.GameObject.GetGameObjectHierarchy(findResp.GameObjects[0].ID)
-			if err != nil {
-				log.Fatalf("GetHierarchy: %v", err)
+	// 3.4 ListComponents (use first GameObject)
+	if len(scenesResp.Scenes) > 0 {
+		sceneID := scenesResp.Scenes[0].ID
+		goResult := registry.GameObject.ListGameObjects(sceneID)
+		if goResult.Success {
+			goList, ok := goResult.Data.(tools.ListGameObjectsResponse)
+			if ok && len(goList.GameObjects) > 0 {
+				gobjID := goList.GameObjects[0].ID
+				compResult := registry.Component.ListComponents(gobjID)
+				if !compResult.Success {
+					log.Fatalf("ListComponents failed: %s", compResult.Error.Message)
+				}
+				compList, ok := compResult.Data.(tools.ListComponentsResponse)
+				if !ok {
+					log.Fatalf("ListComponents: unexpected response type")
+				}
+				fmt.Printf("3.4 ListComponents: %d components on GameObject\n", len(compList.Components))
 			}
-			fmt.Printf("3.4 Hierarchy(%s): children=%d parents=%d | Warnings=%v\n",
-				hierResp.GameObject.Name,
-				len(hierResp.Children),
-				len(hierResp.Parents),
-				hierResp.Warnings)
 		}
 	}
 
-	// 3.5 FindScripts
-	scriptResp, err := registry.Script.FindScripts(tools.FindScriptsRequest{Name: "UIManager"})
-	if err != nil {
-		log.Fatalf("FindScripts: %v", err)
-	}
-	fmt.Printf("3.5 FindScripts('UIManager'): %d found\n", len(scriptResp.Scripts))
-
-	// 3.6 GetGameObjectsUsingScript
-	if len(scriptResp.Scripts) > 0 {
-		usageResp, err := registry.Script.GetGameObjectsUsingScript(tools.GetGameObjectsUsingScriptRequest{
-			ScriptID: scriptResp.Scripts[0].ID,
-		})
-		if err != nil {
-			log.Fatalf("GetGameObjectsUsingScript: %v", err)
-		}
-		fmt.Printf("3.6 GetGameObjectsUsingScript: %d GameObjects\n", len(usageResp.GameObjects))
-	}
-
-	// 3.7 ListAssets
-	assetsResp, err := registry.Asset.ListAssets(tools.ListAssetsRequest{})
-	if err != nil {
-		log.Fatalf("ListAssets: %v", err)
-	}
-	fmt.Printf("3.7 ListAssets: %d assets\n", len(assetsResp.Assets))
-
-	// 3.8 ProjectStats
-	projStatsResp, err := registry.Stats.ProjectStats(tools.ProjectStatsRequest{})
-	if err != nil {
-		log.Fatalf("ProjectStats: %v", err)
-	}
-	fmt.Printf("3.8 ProjectStats: scenes=%d gobjs=%d scripts=%d assets=%d\n",
-		projStatsResp.Summary.TotalScenes,
-		projStatsResp.Summary.TotalGameObjects,
-		projStatsResp.Summary.UniqueScripts,
-		projStatsResp.Summary.TotalAssets)
-
-	// 3.9 SceneStats
+	// 3.5 ListScripts (first scene)
 	if len(scenesResp.Scenes) > 0 {
-		sceneStatsResp, err := registry.Stats.SceneStats(tools.SceneStatsRequest{
-			SceneID: scenesResp.Scenes[0].ID,
-		})
-		if err != nil {
-			log.Fatalf("SceneStats: %v", err)
+		sceneID := scenesResp.Scenes[0].ID
+		scriptResult := registry.Script.ListScripts(sceneID)
+		if !scriptResult.Success {
+			log.Fatalf("ListScripts failed: %s", scriptResult.Error.Message)
 		}
-		fmt.Printf("3.9 SceneStats: GO=%d Scripts=%d\n",
-			sceneStatsResp.Statistics.GameObjectCount,
-			sceneStatsResp.Statistics.ScriptCount)
+		scriptList, ok := scriptResult.Data.(tools.ListScriptsResponse)
+		if !ok {
+			log.Fatalf("ListScripts: unexpected response type")
+		}
+		fmt.Printf("3.5 ListScripts: %d scripts in scene\n", len(scriptList.Scripts))
+	}
+
+	// 3.6 ListAssets
+	assetResult := registry.Asset.ListAssets()
+	if !assetResult.Success {
+		log.Fatalf("ListAssets failed: %s", assetResult.Error.Message)
+	}
+	assetList, ok := assetResult.Data.(tools.ListAssetsResponse)
+	if !ok {
+		log.Fatalf("ListAssets: unexpected response type")
+	}
+	fmt.Printf("3.6 ListAssets: %d assets\n", len(assetList.Assets))
+
+	// 3.7 ProjectStats
+	projResult := registry.Stats.ProjectStats()
+	if !projResult.Success {
+		log.Fatalf("ProjectStats failed: %s", projResult.Error.Message)
+	}
+	projStats, ok := projResult.Data.(tools.ProjectStatsResponse)
+	if !ok {
+		log.Fatalf("ProjectStats: unexpected response type")
+	}
+	fmt.Printf("3.7 ProjectStats: scenes=%d gobjs=%d scripts=%d assets=%d\n",
+		projStats.Summary.TotalScenes,
+		projStats.Summary.TotalGameObjects,
+		projStats.Summary.UniqueScripts,
+		projStats.Summary.TotalAssets)
+
+	// 3.8 SceneStats
+	if len(scenesResp.Scenes) > 0 {
+		sceneID := scenesResp.Scenes[0].ID
+		sceneStatResult := registry.Stats.SceneStats(sceneID)
+		if !sceneStatResult.Success {
+			log.Fatalf("SceneStats failed: %s", sceneStatResult.Error.Message)
+		}
+		sceneStats, ok := sceneStatResult.Data.(tools.SceneStatsResponse)
+		if !ok {
+			log.Fatalf("SceneStats: unexpected response type")
+		}
+		fmt.Printf("3.8 SceneStats: GO=%d Scripts=%d\n",
+			sceneStats.Statistics.GameObjectCount,
+			sceneStats.Statistics.ScriptCount)
 	}
 }
