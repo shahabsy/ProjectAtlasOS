@@ -15,6 +15,7 @@ var (
 	registry   *tools.ToolRegistry
 	dbPath     string
 	jsonOutput bool
+	verbose    bool // global verbose flag
 )
 
 func getDefaultDBPath() string {
@@ -61,4 +62,6 @@ func Execute() error {
 func init() {
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "", "Path to graph.db (auto‑detected if omitted)")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	// Add a global verbose flag; subcommands can also set their own.
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Show detailed agent execution trace")
 }

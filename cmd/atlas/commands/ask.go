@@ -8,16 +8,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var verbose bool
-
 var askCmd = &cobra.Command{
 	Use:   "ask <question>",
 	Short: "Ask a natural language question about the Unity project",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		question := strings.Join(args, " ")
-		// Use a model that supports function calling
-		ollama := ai.NewOllamaClient("", "qwen2.5-coder:32b")
+		ollama := ai.NewOllamaClient("", "qwen3-coder-next:latest")
 		agent := ai.NewAgent(ollama, registry, verbose)
 		result, err := agent.RunWithHistory(question, nil)
 		if err != nil {
@@ -44,6 +41,7 @@ var askCmd = &cobra.Command{
 }
 
 func init() {
+	// Bind the verbose flag (global) to this command.
 	askCmd.Flags().BoolVar(&verbose, "verbose", false, "Show detailed agent execution trace")
 	rootCmd.AddCommand(askCmd)
 }

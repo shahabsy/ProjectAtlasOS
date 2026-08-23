@@ -10,7 +10,7 @@ type SceneTools struct{ ctx *Context }
 
 func NewSceneTools(ctx *Context) *SceneTools { return &SceneTools{ctx: ctx} }
 
-// Contract returns the formal specification.
+// Contract returns the formal specification of SceneTools.
 func (t *SceneTools) Contract() Contract {
 	return Contract{
 		Name:        "scene_tools",

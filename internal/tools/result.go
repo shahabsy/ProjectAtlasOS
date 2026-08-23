@@ -1,5 +1,7 @@
 package tools
 
+import "fmt"
+
 // Result represents a structured response from a tool.
 type Result struct {
 	Success bool        `json:"success"`
@@ -9,8 +11,13 @@ type Result struct {
 
 // Error provides structured error information.
 type Error struct {
-	Code    string `json:"code"`    // e.g., "SCENE_NOT_FOUND"
-	Message string `json:"message"` // Human‑readable description
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// Error implements the error interface.
+func (e *Error) Error() string {
+	return fmt.Sprintf("[%s] %s", e.Code, e.Message)
 }
 
 // NewSuccessResult creates a successful result.
