@@ -7,21 +7,16 @@ import (
 	"github.com/shahabsy/ProjectAtlasOS/internal/tools"
 )
 
-// BuildSystemContext creates a concise system prompt with project summary and capabilities.
-// It calls the "get_graph_capabilities" tool via the registry to get real data.
 func BuildSystemContext(registry *tools.ToolRegistry) (string, error) {
-	// Call get_graph_capabilities using the registry.
 	callables := registry.AllCallables()
 	capabilityFn, ok := callables["get_graph_capabilities"]
 	if !ok {
 		return "", fmt.Errorf("get_graph_capabilities tool not found")
 	}
-	// Execute with empty args.
 	resultBytes, err := capabilityFn(json.RawMessage(`{}`))
 	if err != nil {
 		return "", err
 	}
-	// Unmarshal result (expecting tools.Result).
 	var toolResult tools.Result
 	if err := json.Unmarshal(resultBytes, &toolResult); err != nil {
 		return "", fmt.Errorf("failed to unmarshal tool result: %w", err)
@@ -29,7 +24,6 @@ func BuildSystemContext(registry *tools.ToolRegistry) (string, error) {
 	if !toolResult.Success {
 		return "", fmt.Errorf("get_graph_capabilities failed: %s", toolResult.Error.Message)
 	}
-	// Extract data.
 	dataBytes, err := json.Marshal(toolResult.Data)
 	if err != nil {
 		return "", err
@@ -56,8 +50,7 @@ func BuildSystemContext(registry *tools.ToolRegistry) (string, error) {
 		return "", err
 	}
 
-	// Build the prompt.
-	prompt := fmt.Sprintf(`You are Atlas, an AI assistant for Unity projects. You help developers understand their Unity project structure and relationships.
+	prompt := fmt.Sprintf(`You are Atlas, an AI assistant for Unity projects.
 
 Project Summary:
 - Scenes: %d
@@ -71,34 +64,37 @@ Capabilities:
 		result.ProjectOverview.Components, result.ProjectOverview.Scripts,
 		result.ProjectOverview.Assets)
 
-	capabilities := map[string]bool{
-		"Scenes":           result.Capabilities.Scenes,
-		"GameObjects":      result.Capabilities.GameObjects,
-		"Components":       result.Capabilities.Components,
-		"Scripts":          result.Capabilities.Scripts,
-		"SerializedFields": result.Capabilities.SerializedFields,
-		"AssetReferences":  result.Capabilities.AssetReferences,
-		"Prefabs":          result.Capabilities.Prefabs,
+	type capItem struct {
+		name      string
+		available bool
 	}
-	for name, available := range capabilities {
+	capabilities := []capItem{
+		{"Scenes", result.Capabilities.Scenes},
+		{"GameObjects", result.Capabilities.GameObjects},
+		{"Components", result.Capabilities.Components},
+		{"Scripts", result.Capabilities.Scripts},
+		{"SerializedFields", result.Capabilities.SerializedFields},
+		{"AssetReferences", result.Capabilities.AssetReferences},
+		{"Prefabs", result.Capabilities.Prefabs},
+	}
+	for _, c := range capabilities {
 		status := "✓"
-		if !available {
+		if !c.available {
 			status = "✗"
 		}
-		prompt += fmt.Sprintf("- %s: %s\n", name, status)
+		prompt += fmt.Sprintf("- %s: %s\n", c.name, status)
 	}
 
 	prompt += `
-You have access to the following tools to retrieve detailed information. Always use the tools to answer questions; do not guess or fabricate data.
+You have access to a set of tools that can query the Unity project graph.
+For common queries (listing assets, scenes, scripts, gameobjects, project stats), the system handles them directly.
+You are only invoked for questions that require reasoning, multi-step planning, or ambiguous interpretation.
 
-When you need to answer a question:
-1. Decide which tool(s) are needed.
-2. Call the tool(s) with appropriate arguments.
-3. Use the returned data to answer the user's question.
-
-If you are unsure or the required information is not available, say so clearly.
+**Rules:**
+- Never guess or fabricate data. Use the tools when needed.
+- For complex questions, plan the tool calls and execute them sequentially.
+- Do not ask follow‑up questions; provide the final answer using the tool results.
 
 Current conversation:`
-
 	return prompt, nil
 }

@@ -16,6 +16,7 @@ type Agent struct {
 	ollama   *OllamaClient
 	registry *tools.ToolRegistry
 	verbose  bool
+	cache    *Cache
 }
 
 // NewAgent creates a new Agent.
@@ -24,6 +25,7 @@ func NewAgent(ollama *OllamaClient, registry *tools.ToolRegistry, verbose bool) 
 		ollama:   ollama,
 		registry: registry,
 		verbose:  verbose,
+		cache:    NewCache(5 * time.Minute), // cache TTL 5 minutes
 	}
 }
 
@@ -52,6 +54,171 @@ func (a *Agent) RunWithHistory(question string, history []Message) (AgentResult,
 	// Prepare tools.
 	toolDefs := a.buildToolDefinitions()
 	callables := a.registry.AllCallables()
+
+	// --- Step 1: Deterministic router ---
+	decision := RouteQuery(question, a.registry)
+	if a.verbose {
+		a.log("[Router] Decision: %+v", decision)
+	}
+	if decision != nil && decision.Confidence >= 0.9 {
+		if a.verbose {
+			a.log("[Router] Direct tool: %s (confidence %.2f)", decision.Tool, decision.Confidence)
+		}
+		// Try cache first.
+		cacheKey := decision.Tool + ":" + string(decision.Arguments)
+		cached := a.cache.Get(cacheKey)
+		if cached != nil {
+			if a.verbose {
+				a.log("[Cache] Hit for key: %s", cacheKey)
+			}
+			formatted, err := formatToolResult(decision.Tool, cached)
+			if err != nil {
+				if a.verbose {
+					a.log("[Format] Error formatting cached result: %v", err)
+				}
+				formatted = string(cached)
+			}
+			return AgentResult{
+				Answer: formatted,
+				ToolCalls: []ToolCallRecord{{
+					Name:      decision.Tool,
+					Arguments: decision.Arguments,
+					Result:    json.RawMessage(cached),
+				}},
+				Success:    true,
+				Iterations: 1,
+			}, nil
+		}
+		if a.verbose {
+			a.log("[Cache] Miss for key: %s", cacheKey)
+		}
+
+		// Execute tool.
+		fn, ok := callables[decision.Tool]
+		if !ok {
+			return AgentResult{Success: false, Error: fmt.Sprintf("router selected unknown tool: %s", decision.Tool)}, nil
+		}
+		resultBytes, err := fn(decision.Arguments)
+		if err != nil {
+			return AgentResult{Success: false, Error: err.Error()}, nil
+		}
+		// Store in cache.
+		a.cache.Set(cacheKey, resultBytes)
+
+		// Format result.
+		formatted, err := formatToolResult(decision.Tool, resultBytes)
+		if err != nil {
+			if a.verbose {
+				a.log("[Format] Error formatting result: %v", err)
+			}
+			formatted = string(resultBytes)
+		}
+		var toolResult tools.Result
+		var resultData interface{}
+		if err := json.Unmarshal(resultBytes, &toolResult); err == nil {
+			resultData = toolResult
+		} else {
+			resultData = string(resultBytes)
+		}
+		return AgentResult{
+			Answer: formatted,
+			ToolCalls: []ToolCallRecord{{
+				Name:      decision.Tool,
+				Arguments: decision.Arguments,
+				Result:    resultData,
+			}},
+			Success:    true,
+			Iterations: 1,
+		}, nil
+	}
+
+	// --- Step 2: Keyword fallback (safety net) ---
+	lower := strings.ToLower(question)
+	fallbackTool := ""
+	switch {
+	case strings.Contains(lower, "asset") || strings.Contains(lower, "assets"):
+		fallbackTool = "list_assets"
+	case strings.Contains(lower, "scene") || strings.Contains(lower, "scenes"):
+		fallbackTool = "list_scenes"
+	case strings.Contains(lower, "script") || strings.Contains(lower, "scripts"):
+		fallbackTool = "list_all_scripts"
+	case strings.Contains(lower, "gameobject") || strings.Contains(lower, "game objects") || strings.Contains(lower, "object") && !strings.Contains(lower, "component"):
+		fallbackTool = "list_all_gameobjects"
+	case strings.Contains(lower, "stat") || strings.Contains(lower, "stats") || strings.Contains(lower, "project summary"):
+		fallbackTool = "project_stats"
+	}
+	if fallbackTool != "" {
+		if a.verbose {
+			a.log("[Fallback] Direct tool: %s (keyword match)", fallbackTool)
+		}
+		// Use cache.
+		cacheKey := fallbackTool + ":{}"
+		cached := a.cache.Get(cacheKey)
+		if cached != nil {
+			if a.verbose {
+				a.log("[Cache] Hit for key: %s", cacheKey)
+			}
+			formatted, err := formatToolResult(fallbackTool, cached)
+			if err != nil {
+				if a.verbose {
+					a.log("[Format] Error formatting cached result: %v", err)
+				}
+				formatted = string(cached)
+			}
+			return AgentResult{
+				Answer: formatted,
+				ToolCalls: []ToolCallRecord{{
+					Name:      fallbackTool,
+					Arguments: json.RawMessage(`{}`),
+					Result:    json.RawMessage(cached),
+				}},
+				Success:    true,
+				Iterations: 1,
+			}, nil
+		}
+		if a.verbose {
+			a.log("[Cache] Miss for key: %s", cacheKey)
+		}
+
+		fn, ok := callables[fallbackTool]
+		if !ok {
+			return AgentResult{Success: false, Error: fmt.Sprintf("fallback tool %s not found", fallbackTool)}, nil
+		}
+		resultBytes, err := fn(json.RawMessage(`{}`))
+		if err != nil {
+			return AgentResult{Success: false, Error: err.Error()}, nil
+		}
+		a.cache.Set(cacheKey, resultBytes)
+		formatted, err := formatToolResult(fallbackTool, resultBytes)
+		if err != nil {
+			if a.verbose {
+				a.log("[Format] Error formatting result: %v", err)
+			}
+			formatted = string(resultBytes)
+		}
+		var toolResult tools.Result
+		var resultData interface{}
+		if err := json.Unmarshal(resultBytes, &toolResult); err == nil {
+			resultData = toolResult
+		} else {
+			resultData = string(resultBytes)
+		}
+		return AgentResult{
+			Answer: formatted,
+			ToolCalls: []ToolCallRecord{{
+				Name:      fallbackTool,
+				Arguments: json.RawMessage(`{}`),
+				Result:    resultData,
+			}},
+			Success:    true,
+			Iterations: 1,
+		}, nil
+	}
+
+	// --- Step 3: AI Agent Loop (ambiguous/complex queries) ---
+	if a.verbose {
+		a.log("[Agent] No deterministic route; delegating to LLM.")
+	}
 	var toolCalls []ToolCallRecord
 	iterations := 0
 
@@ -92,9 +259,8 @@ func (a *Agent) RunWithHistory(question string, history []Message) (AgentResult,
 		for _, call := range resp.ToolCalls {
 			start := time.Now()
 			toolName := call.Function.Name
-			rawArgsMap := call.Function.Arguments // map[string]any
+			rawArgsMap := call.Function.Arguments
 
-			// Marshal to JSON bytes for passing to tool functions.
 			rawArgsBytes, marshalErr := json.Marshal(rawArgsMap)
 			if marshalErr != nil {
 				errMsg := fmt.Sprintf("failed to marshal arguments: %v", marshalErr)
@@ -108,7 +274,7 @@ func (a *Agent) RunWithHistory(question string, history []Message) (AgentResult,
 				})
 				toolCalls = append(toolCalls, ToolCallRecord{
 					Name:      toolName,
-					Arguments: json.RawMessage(rawArgsBytes), // rawArgsBytes is nil if error, but we can still record
+					Arguments: json.RawMessage(rawArgsBytes),
 					Error:     errMsg,
 				})
 				continue
@@ -153,21 +319,36 @@ func (a *Agent) RunWithHistory(question string, history []Message) (AgentResult,
 				continue
 			}
 
-			// Execute tool with the JSON bytes.
-			resultBytes, err := fn(json.RawMessage(rawArgsBytes))
-			if err != nil {
-				errMsg := fmt.Sprintf("execution error: %v", err)
-				history = append(history, Message{
-					Role:     "tool",
-					ToolName: toolName,
-					Content:  errMsg,
-				})
-				toolCalls = append(toolCalls, ToolCallRecord{
-					Name:      toolName,
-					Arguments: json.RawMessage(rawArgsBytes),
-					Error:     errMsg,
-				})
-				continue
+			// Check cache for LLM-selected tool calls (we can also cache them).
+			cacheKey := toolName + ":" + string(rawArgsBytes)
+			cached := a.cache.Get(cacheKey)
+			var resultBytes []byte
+			if cached != nil {
+				if a.verbose {
+					a.log("[Cache] Hit for key: %s", cacheKey)
+				}
+				resultBytes = cached
+			} else {
+				if a.verbose {
+					a.log("[Cache] Miss for key: %s", cacheKey)
+				}
+				var err error
+				resultBytes, err = fn(json.RawMessage(rawArgsBytes))
+				if err != nil {
+					errMsg := fmt.Sprintf("execution error: %v", err)
+					history = append(history, Message{
+						Role:     "tool",
+						ToolName: toolName,
+						Content:  errMsg,
+					})
+					toolCalls = append(toolCalls, ToolCallRecord{
+						Name:      toolName,
+						Arguments: json.RawMessage(rawArgsBytes),
+						Error:     errMsg,
+					})
+					continue
+				}
+				a.cache.Set(cacheKey, resultBytes)
 			}
 
 			// Parse result for structured logging.
@@ -212,20 +393,17 @@ func (a *Agent) validateToolCall(toolName string, args json.RawMessage) error {
 		return fmt.Errorf("unknown tool: %s", toolName)
 	}
 
-	// Unmarshal into temporary map for validation.
 	var parsed map[string]interface{}
 	if err := json.Unmarshal(args, &parsed); err != nil {
 		return fmt.Errorf("invalid JSON arguments: %w", err)
 	}
 
-	// Validate required fields from schema.
 	schema := contract.InputSchema
 	for _, required := range schema.Required {
 		if _, exists := parsed[required]; !exists {
 			return fmt.Errorf("missing required argument: %s", required)
 		}
 	}
-	// Additional type checks can be added here.
 	return nil
 }
 
@@ -244,7 +422,6 @@ func (a *Agent) buildToolDefinitions() []Tool {
 		if !ok {
 			continue
 		}
-		// Convert tools.Schema to ai.Parameters.
 		params := Parameters{
 			Type:     "object",
 			Required: contract.InputSchema.Required,
